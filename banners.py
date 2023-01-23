@@ -2,21 +2,41 @@
 
 import cv2
 import rosbag
-import argparse
 import utm
-import yaml
-import cv2
-import pathlib 
+import os 
 import rospy
+from dataclasses import dataclass
+import pandas as pd
+import pickle
 
 import numpy as np
 
-from pathlib import Path
 from cv_bridge import CvBridge
 from std_msgs.msg import UInt8
 from sensor_msgs.msg import Imu, NavSatFix, Image
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, PoseWithCovarianceStamped, Pose
 from scipy.spatial.transform import Rotation as R
+
+import csv_relations
+
+ASSUMED_ALTITUDE = 10 #m
+
+POINTS_FORMAT = 0
+
+PI_W = 1920
+PI_H = 1080
+F_W = 640
+F_H = 512
+
+rbg_K = np.array([[500, 0, PI_W/2],
+                  [0, 500, PI_H/2],
+                  [0, 0, 1]])
+noir_K = np.array([[500, 0, PI_W/2],
+                  [0, 500, PI_H/2],
+                  [0, 0, 1]])
+flir_K = np.array([[500, 0, F_W/2],
+                   [0, 500, F_H/2],
+                   [0, 0, 1]])
 
 """
 ## The role of this software is to 
@@ -54,237 +74,109 @@ from scipy.spatial.transform import Rotation as R
 """
 
 ### idea: take topics and msg types as lists w/ 1:1 correspondence, zip lists
-TOPICS = ['/dji_osdk_ros/gps_health', '/dji_osdk_ros/gps_position', '/dji_osdk_ros/imu', '/dji_osdk_ros/local_position', '/cam0/camera/image_raw', '/cam1/camera/image_raw', '/therm/image_raw_throttle']
+# TOPICS = ['/current_pose', '/cam0/camera/image_raw', '/cam1/camera/image_raw', '/therm/image_raw_throttle']
 CAM_LIST = ['rgb', 'noIR', 'thermal']
 
+cols = ["xmax", "ymax", "xmin", "ymin", "pose", "save_loc"]
+
 class CameraCombo:
+    def __init__(self, dir_data):
+        self.dir = dir_data
+        self.rgb = None
+        self.noir = None
+        self.flir = None
+        self.pose = None # this is just pose, remove all the stamping and covariance 
+        self.parsed = pd.DataFrame(columns=cols)
     
-    def __init__(self, topics, cam0_yaml, cam1_yaml, therm_yaml):
-        self.cam0 = None
-        self.cam0_params = self.parse_yaml(cam0_yaml)
-        self.cam1 = None
-        self.cam1_params = self.parse_yaml(cam1_yaml)
-        self.therm = None
-        self.therm_params = self.parse_yaml(therm_yaml)
+    def stack(self, time):
+        # check if all images are not none
+        if self.rgb and self.flir and self.noir:        
+            s = {"rgb": self.rgb, 
+                "noir": self.noir, 
+                "flir": self.flir}
+            loc = os.path.join(self.dir.path, "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin")
+            # send stack to binary file
+            pickle.dump(s, open(loc, "wb"))
+            
+            rot = R.from_quat([self.pose.orientation.x, self.pose.orientation.y, self.pose.orientation.z, self.pose.orientation.w]).as_matrix()
+            trans = np.array([self.pose.position.x, self.pose.position.y, self.pose.position.z])
 
-        self.pos = None
-        self.gps_old = None
-        self.gps_new = None
-        self.gps_health = None
+            # use K to compute vision on the ground
+            rgb_ground_points = self.visionCone(PI_W, PI_H, rot, trans, rbg_K)
+            noir_ground_points = self.visionCone(PI_W, PI_H, rot, trans, noir_K)
+            flir_ground_points = self.visionCone(F_W, F_H, rot, trans, flir_K)
 
-        self.r = None
-        self.t = None
+            # print(rgb_ground_points[0])
 
-        self.odom_sub = rospy.Subscriber(topics[1], NavSatFix, self.gps_pos_callback)
-        self.gps_health_sub = rospy.Subscriber(topics[0], UInt8, self.gps_health_callback)
-        self.cam0_sub = rospy.Subscriber(topics[4], Image, self.cam0_callback)
-        self.cam1_sub = rospy.Subscriber(topics[5], Image, self.cam1_callback)
-        self.therm_sub = rospy.Subscriber(topics[6], Image, self.therm_callback)
+            # put data into reasonable format
+            if POINTS_FORMAT == 1:
+                # save a list of all of the ground points (ie. xma = {xma_rgb, xma_noir, xma_flir})
+                xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0]]
+                yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1]]
+                xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0]]
+                ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1]]
 
-        # TODO: decide on dataset structure and formats to implement the saving protocol
-        # for t in topics:
-        #     Path("imgs_f/" + t).mkdir(parents=True, exist_ok=True)
+            elif POINTS_FORMAT == 2:
+                # save all the data (ie. xma = {xma_com, xma_rgb, xma_noir, xma_flir})
+                xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0], min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])]
+                yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1], min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])]
+                xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0], min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])]
+                ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1], min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])]
 
-
-    def gps_health_callback(self, msg):
-        self.gps_health = msg  # update gps health
-        pass
-
-
-    def odom_callback(self, msg):        
-        if self.gps_health is not None and self.gps_health >= 3:
-            self.gps_old = self.gps_new  # if gps is healthy, take a reading
-            self.gps_new = msg
-        else:  # else clear stale readings
-            self.gps_old = None
-            self.gps_new = None  # this means that I need 2 odom_msgs before I can run the fov check/annotator 
-        pass
-
-
-    def cam0_callback(self, msg):
-        self.cam0 = msg
-        pass
+            else: # POINTS_FORMAT == 0 as well
+                # figure out the intersection of the ground points such that clicks will only register if seen by all 3 cameras
+                xma = min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])
+                yma = min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])
+                xmi = min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])
+                ymi = min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])
 
 
-    def cam1_callback(self, msg):
-        self.cam1 = msg
-        pass
+            # create 4x4 matrix for pose
+            pose = np.concatenate((rot, np.expand_dims(trans, axis=0).T), axis=1)
+            pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
 
 
-    def therm_callback(self, msg):        
-        self.therm = msg
-        pass
+            # save stack save location, pose, date, and coords to dataframe
+            self.parsed.loc[len(self.parsed.index)] = [xma, yma, xmi, ymi, pose, loc]
 
 
-    def parse_yaml(self, yaml_in):
-        """ Parse ROS camera_calibration-formatted yaml to cv2.undistort() inputs. """
+    def done(self):
+        self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
-        with open(yaml_in) as f:
-            ci = yaml.safe_load(f)
 
-        w = ci["image_width"]
-        h = ci["image_height"]
-        try:
-            mtx = ci["camera_matrix"]["data"].reshape((3,3))
-        except KeyError:  # may be incorrect error to catch
-            mtx=False
-        dst = ci["distortion_coefficients"]["data"]
-
-        return w, h, mtx, dst
-
-    
-    def odomDecode(self):
-        """ decode quaternion into rotation matrix and compute aggregate affine transform since last frame 
-        
-        R is decoded quaternion
-        T is computed from delta between self.gps_pos data, converted to (m,m,m) from (lat,lon,m) and visionCone output
-        """
-        gps_old = (self.gps_old['latitude'], self.gps_old['longitude'], self.gps_old['altitude'])
-        gps_new = (self.gps_new['latitude'], self.gps_new['longitude'], self.gps_new['altitude'])
-        head = self.pos['heading']
-
-        r = R.from_quat(head).as_matrix()  # from_quat() assumes scalar first, head may be scalar last. watch for inaccurate behavior
-
-        return r, gps_new - gps_old
-
+    def get_frames(self, x, y):
+        return self.parsed.loc[(self.parsed["xmax"] > x) & (self.parsed["xmin"] < x) &
+                        (self.parsed["ymax"] > y) & (self.parsed["ymin"] < y)]['save_loc']
 
     def visionCone(self, w, h, r, t, K=False):
-        """ find corners of polyhedral vision cone in real-world units """
-
+        # teh corners of the image
         ul = np.array([0,0,1])
-        ur = np.array([0,w-1,1])
+        # ur = np.array([0,w-1,1])
         br = np.array([h-1,w-1,1])
-        bl = np.array([h-1,0,1])
+        # bl = np.array([h-1,0,1])
+        corners = [ul, br]
 
-        corners = [ul, ur, br, bl]
+
         vizCone = []
-
         for corner in corners:
+            # project corner to meters
             if K is not False:
                 tmp = np.linalg.inv(K)@corner
-            else:  # assume prerectified, no need for multiplication of corner with K^(-1)
+            else:
                 tmp = corner
-            tmp = np.linalg.inv(r)@(tmp - t)  # variable t may need to come to meters from UTM
-            # scale = self.gps_pos['altitude']/tmp[-1]  # need a scale factor to account for altitude/depth, wanna use the laser, not GPS
-            # tmp *= scale
-            vizCone.append(tmp)
+            # scale corner to altitude
+            tmp = tmp * ASSUMED_ALTITUDE
+            # rotate and translate corner by pose
+            # print(r, t, tmp)
+            tmp = np.linalg.inv(r)@(tmp - t) # this may be backwards
+            vizCone.append(tmp[:2])
 
         return vizCone
 
+@dataclass
+class Dir:
+    path: str
+    date: str
+    bag: str = None
+    clicks: str = None
 
-    def FOV(self):
-        """ construct FOV
-
-        Back projection to see if clicks are within FOV of a given frame 
-        
-        Given field annotations, drone GPS+IMU odometry, camera geometry
-        Return cone of vision in NED/GPS coordinates
-
-        ASSUMES THE GROUND IS FLAT WITHIN THE FOV - load DEM/other map for better representation of the ground
-        --> fovCheck probably gets significantly more expensive without flatness... Does it?
-            --> is cost increase worth it? 
-                + position of pins will not vary much within O(0.25m) approx <-> true altitude variance
-
-        """
-        tmp = []
-        frame = (self.cam0, self.cam1, self.therm)
-        params = (self.cam0_params, self.cam1_params, self.therm_params) 
-        if frame != (None, None, None) and self.gps_health >= 3:
-            self.r, self.t = self.odomDecode()
-            for i, fr in enumerate(frame):  # rgb (30Hz), noIR (30Hz), and FLIR (5Hz) frames present
-                w,h,mtx,_ = params[i]
-                vizCone = self.visionCone(w, h, self.r, self.t, mtx)
-                tmp.append((fr, params[i], vizCone))
-        else:
-            tmp.append((fr, params[i], None))
-
-        self.cam0 = None
-        self.cam1 = None
-        self.therm = None
-
-        return tmp
-
-
-    def fovCheck(self, visConeEntry, annotations):
-        """ taget in FOV check
-
-        given self.FOV != None output and annotation set, see if annotations are in the FOV
-
-        """
-        inView = None
-        _, _, cone = visConeEntry
-        if cone is not None:  # corners = [ul, ur, br, bl]
-            inView = []
-            normals = []
-            for i in range(len(cone)):
-                try:
-                    a,b,_ = cone[i]
-                    c,d,_ = cone[i+1]
-                except IndexError:
-                    a,b,_ = cone[i]
-                    c,d,_ = cone[0]
-                normals.append(np.array([d-b, a-c]))
-
-            for i, annotation in enumerate(annotations):
-                checks = []
-                for normal in normals:
-                    checks.append(annotation@normal)
-                if np.all(checks < 0):  # annotation is in the cone
-                    inView.append(i)
-
-        return inView
-
-
-    def annotator(self, inView, annotations):
-        """ construct annotation string to append to filename using inView """
-        tmp = ""
-
-        for i in inView:
-            pin = annotations[i]
-            
-             
-            tmp += str(pin)
-            tmp += "-"
-            
-        return tmp
-
-
-def main(bagname, _yamls, _csv):
-    """ run it all """
-    annotations = np.genfromtxt(_csv, delimiter=',')
-
-    rospy.init_node('data_tube')
-    cc = CameraCombo(TOPICS, _yamls)
-
-    while True:
-        if cc.cam0 == None and cc.cam1 == None and cc.therm == None: 
-            visCone = None
-        elif cc.pos == None:
-            visCone = None
-        else:
-            visCone = cc.FOV()
-
-        for i, entry in enumerate(visCone):
-            if entry[-1] is not None:
-                inView = cc.fovCheck(entry, annotations)
-                if inView is not None:
-                    inViewStr = cc.annotator(inView, entry, annotations)
-                else: 
-                    inViewStr = "NoTargetsInView"
-            else:
-                print("Problem constructing field of view.")
-            # savename = CAM_LIST[i] + inViewStr  # need to know exactly what comes in 
-            # with open(savename, 'xw'):
-            #    
-
-    return 0
-
-
-if __name__=="__main__":
-    parser = argparse.ArgumentParser(description='Stitch images and position data to GPS locations of targets.')
-    parser.add_argument('bagname', type=str)
-    parser.add_argument('yaml', type=str, required=False)
-    parser.add_argument('csv', type=str, required=False)
-    args =parser.parse_args()
-    
-    main(args.bagname, args.yaml)
