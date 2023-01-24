@@ -28,11 +28,11 @@ PI_H = 1080
 F_W = 640
 F_H = 512
 
-rbg_K = np.array([[500, 0, PI_W/2],
-                  [0, 500, PI_H/2],
+rbg_K = np.array([[679.0616691224743, 0.0, 866.4845535612815],
+                  [0.0, 679.7611413287517, 593.4758325974849],
                   [0, 0, 1]])
-noir_K = np.array([[500, 0, PI_W/2],
-                  [0, 500, PI_H/2],
+noir_K = np.array([[677.6841664243713, 0.0, 927.0775869012278],
+                  [0.0, 678.3384456258163, 545.5178145289105],
                   [0, 0, 1]])
 flir_K = np.array([[500, 0, F_W/2],
                    [0, 500, F_H/2],
@@ -168,7 +168,7 @@ class CameraCombo:
             tmp = tmp * ASSUMED_ALTITUDE
             # rotate and translate corner by pose
             # print(r, t, tmp)
-            tmp = np.linalg.inv(r)@(tmp - t) # this may be backwards
+            tmp = r@(tmp + t)
             vizCone.append(tmp[:2])
 
         return vizCone
