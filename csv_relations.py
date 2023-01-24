@@ -12,8 +12,10 @@ class CSVAugmented:
     def jungler(self, point, health, proc_dat):
         all_imgs = []
         for d in proc_dat:
-            all_imgs += d.get_frames(point[0], point[1])
+            all_imgs += d.get_frames(point[0], point[1]).tolist()
         
+        # print(all_imgs)
+
         self.related.loc[len(self.related.index)] = [point[0], point[1], health, all_imgs]
 
     def done(self):

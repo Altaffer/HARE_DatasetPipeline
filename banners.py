@@ -145,14 +145,17 @@ class CameraCombo:
 
 
     def get_frames(self, x, y):
-        return self.parsed.loc[(self.parsed["xmax"] > x) & (self.parsed["xmin"] < x) &
+        got_frames = self.parsed.loc[(self.parsed["xmax"] > x) & (self.parsed["xmin"] < x) &
                         (self.parsed["ymax"] > y) & (self.parsed["ymin"] < y)]['save_loc']
+
+        print(got_frames)
+        return got_frames
 
     def visionCone(self, w, h, r, t, K=False):
         # teh corners of the image
-        ul = np.array([0,0,1])
+        ul = np.array([0,0,1]).T
         # ur = np.array([0,w-1,1])
-        br = np.array([h-1,w-1,1])
+        br = np.array([h-1,w-1,1]).T
         # bl = np.array([h-1,0,1])
         corners = [ul, br]
 
@@ -168,7 +171,13 @@ class CameraCombo:
             tmp = tmp * ASSUMED_ALTITUDE
             # rotate and translate corner by pose
             # print(r, t, tmp)
-            tmp = r@(tmp + t)
+            # tmp = np.linalg.inv(r)@(tmp + t)
+            # create 4x4 pose mtx
+            pose = np.concatenate((r, np.expand_dims(t, axis=0).T), axis=1)
+            pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
+            # further homoginize tmp
+            tmp = np.append(tmp, [1.0], axis=0)
+            tmp = pose@tmp
             vizCone.append(tmp[:2])
 
         return vizCone
