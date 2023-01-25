@@ -144,7 +144,21 @@ class CameraCombo:
 
 
     def done(self):
-        # check that all 
+        # # check that all fovs are good
+        # if self.rg_fov_check.count(self.rg_fov_check[0].all()) == len(self.rg_fov_check):
+        #     print("all rgb FOVs are the same")
+        # else:
+        #     print("SOMETHING WRONG WITH RGB FOV")
+        # if self.no_fov_check.count(self.no_fov_check[0].all()) == len(self.no_fov_check):
+        #     print("all noir FOVs are the same")
+        # else:
+        #     print("SOMETHING WRONG WITH NOIR FOV")
+        # if self.fl_fov_check.count(self.fl_fov_check[0].all()) == len(self.fl_fov_check):
+        #     print("all flir FOVs are the same")
+        # else:
+        #     print("SOMETHING WRONG WITH FLIR FOV")
+        
+        
         self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
 
@@ -174,12 +188,12 @@ class CameraCombo:
                 tmp = corner
             # scale corner to altitude
             tmp = tmp * ASSUMED_ALTITUDE
-            if K == rbg_K:
+            if K.all() == rbg_K.all():
                 self.rg_fov_check.append(tmp)
-            if K == noir_K:
+            if K.all() == noir_K.all():
                 self.no_fov_check.append(tmp)
-            if K == flir_K:
-                self.fi_fov_check.append(tmp)
+            if K.all() == flir_K.all():
+                self.fl_fov_check.append(tmp)
             # rotate and translate corner by pose
             # print(r, t, tmp)
             # tmp = np.linalg.inv(r)@(tmp + t)
@@ -195,9 +209,12 @@ class CameraCombo:
 
 
     def pretty_image(self, pt, img_loc):
-        imgs = pickle.load(img_loc)
+        imgs = pickle.loads(img_loc)
         row = self.parsed.loc[self.parsed['save_loc'] == img_loc]
-        xy = 
+        # subtract xmax and ymax from pt then use K to project back
+        x = row.xmax - pt[0]
+        y = row.ymax - pt[1]
+        print(x, y)
 
 @dataclass
 class Dir:
