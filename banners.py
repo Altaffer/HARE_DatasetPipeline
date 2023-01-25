@@ -87,6 +87,9 @@ class CameraCombo:
         self.flir = None
         self.pose = None # this is just pose, remove all the stamping and covariance 
         self.parsed = pd.DataFrame(columns=cols)
+        self.rg_fov_check = []
+        self.no_fov_check = []
+        self.fl_fov_check = []
     
     def stack(self, time):
         # check if all images are not none
@@ -141,6 +144,7 @@ class CameraCombo:
 
 
     def done(self):
+        # check that all 
         self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
 
@@ -150,6 +154,7 @@ class CameraCombo:
 
         print(got_frames)
         return got_frames
+
 
     def visionCone(self, w, h, r, t, K=False):
         # teh corners of the image
@@ -169,6 +174,12 @@ class CameraCombo:
                 tmp = corner
             # scale corner to altitude
             tmp = tmp * ASSUMED_ALTITUDE
+            if K == rbg_K:
+                self.rg_fov_check.append(tmp)
+            if K == noir_K:
+                self.no_fov_check.append(tmp)
+            if K == flir_K:
+                self.fi_fov_check.append(tmp)
             # rotate and translate corner by pose
             # print(r, t, tmp)
             # tmp = np.linalg.inv(r)@(tmp + t)
@@ -181,6 +192,12 @@ class CameraCombo:
             vizCone.append(tmp[:2])
 
         return vizCone
+
+
+    def pretty_image(self, pt, img_loc):
+        imgs = pickle.load(img_loc)
+        row = self.parsed.loc[self.parsed['save_loc'] == img_loc]
+        xy = 
 
 @dataclass
 class Dir:
