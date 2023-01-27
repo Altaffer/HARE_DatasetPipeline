@@ -34,8 +34,8 @@ rbg_K = np.array([[679.0616691224743, 0.0, 866.4845535612815],
 noir_K = np.array([[677.6841664243713, 0.0, 927.0775869012278],
                   [0.0, 678.3384456258163, 545.5178145289105],
                   [0, 0, 1]])
-flir_K = np.array([[500, 0, F_W/2],
-                   [0, 500, F_H/2],
+flir_K = np.array([[250, 0, F_W/2],
+                   [0, 250, F_H/2],
                    [0, 0, 1]])
 
 """
@@ -171,7 +171,7 @@ class CameraCombo:
 
 
     def visionCone(self, w, h, r, t, K=False):
-        # teh corners of the image
+        # the corners of the image
         ul = np.array([0,0,1]).T
         # ur = np.array([0,w-1,1])
         br = np.array([h-1,w-1,1]).T
@@ -203,6 +203,7 @@ class CameraCombo:
             # further homoginize tmp
             tmp = np.append(tmp, [1.0], axis=0)
             tmp = pose@tmp
+            tmp = tmp / tmp[3]
             vizCone.append(tmp[:2])
 
         return vizCone
