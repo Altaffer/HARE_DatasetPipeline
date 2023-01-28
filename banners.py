@@ -97,7 +97,7 @@ class CameraCombo:
             s = {"rgb": self.rgb, 
                 "noir": self.noir, 
                 "flir": self.flir}
-            loc = os.path.join(self.dir.path, "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin")
+            loc = os.path.join(os.path.join(self.dir.path, 'stacks/'), "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin")
             # send stack to binary file
             pickle.dump(s, open(loc, "wb"))
             
@@ -171,40 +171,47 @@ class CameraCombo:
 
 
     def visionCone(self, w, h, r, t, K=False):
+        """ Computes the world positions of frame corners.
+        
+        Inputs:
+            w, scalar = frame width, pixels
+            h, scalar = frame height, pixels
+            r, matrix = rotation matrix from last frame POV, decoded from heading quaternion
+            TODO: r may need to be augmented by the last (few?) headings, for rotation relative to last frame
+            t, vector = translation from last frame POV 
+            K, matrix = intrinsics matrix, or False if no calibration is available/needed
+            
+        Returns:
+            vizCone, matrix = matrix whose columns are the real-world coordinates of the frame corners in
+                    the camera reference frame, ordered [ ul | ur | bl | br ]
+            """
+
         # the corners of the image
-        ul = np.array([0,0,1]).T
-        # ur = np.array([0,w-1,1])
-        br = np.array([h-1,w-1,1]).T
-        # bl = np.array([h-1,0,1])
-        corners = [ul, br]
+        ul = [0,0,1]
+        ur = [0,w-1,1]
+        br = [h-1,w-1,1]
+        bl = [h-1,0,1]
+        # corners = np.array([ul, br]).T  # corners is a 3x2 matrix
+        corners = np.array([ul, ur, bl, br]).T  # corners is a 3x4 matrix
 
+        # convert pixels to world units
+        if K is not False:
+            vizCone = np.linalg.inv(K)@corners
+        else:
+            vizCone = corners
+        vizCone *= ASSUMED_ALTITUDE  # scale to altitude
 
-        vizCone = []
-        for corner in corners:
-            # project corner to meters
-            if K is not False:
-                tmp = np.linalg.inv(K)@corner
-            else:
-                tmp = corner
-            # scale corner to altitude
-            tmp = tmp * ASSUMED_ALTITUDE
-            if K.all() == rbg_K.all():
-                self.rg_fov_check.append(tmp)
-            if K.all() == noir_K.all():
-                self.no_fov_check.append(tmp)
-            if K.all() == flir_K.all():
-                self.fl_fov_check.append(tmp)
-            # rotate and translate corner by pose
-            # print(r, t, tmp)
-            # tmp = np.linalg.inv(r)@(tmp + t)
-            # create 4x4 pose mtx
-            pose = np.concatenate((r, np.expand_dims(t, axis=0).T), axis=1)
-            pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
-            # further homoginize tmp
-            tmp = np.append(tmp, [1.0], axis=0)
-            tmp = pose@tmp
-            tmp = tmp / tmp[3]
-            vizCone.append(tmp[:2])
+        # Nick, honest to god, I don't know what you're doing here
+        if K.all() == rbg_K.all():
+            self.rg_fov_check.append(vizCone)
+        if K.all() == noir_K.all():
+            self.no_fov_check.append(vizCone)
+        if K.all() == flir_K.all():
+            self.fl_fov_check.append(vizCone)
+        
+        # complete back-projection
+        vizCone -= t  # replicate so that t is subtracted from each corner
+        vizCone = np.linalg.inv(r)@vizCone
 
         return vizCone
 
