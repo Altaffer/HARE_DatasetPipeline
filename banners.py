@@ -210,7 +210,11 @@ class CameraCombo:
             self.fl_fov_check.append(vizCone)
         
         # complete back-projection
-        vizCone -= t  # replicate so that t is subtracted from each corner
+        tmp = t
+        for _ in range(t.shape[0]):
+            tmp = np.hstack((tmp, t))
+
+        vizCone -= tmp  # replicate so that t is subtracted from each corner
         vizCone = np.linalg.inv(r)@vizCone
 
         return vizCone
