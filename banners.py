@@ -215,6 +215,7 @@ class CameraCombo:
         # print(t_m.T)
         
         # complete back-projection
+<<<<<<< HEAD
         # vizCone -= t_m.T  # replicate so that t is subtracted from each corner
         # vizCone = np.linalg.inv(r)@vizCone
 
@@ -238,6 +239,14 @@ class CameraCombo:
         br = np.dot(np.linalg.inv(r), br)
 
         print(ul, br)
+=======
+        tmp = t
+        for _ in range(t.shape[0]):
+            tmp = np.hstack((tmp, t))
+
+        vizCone -= tmp  # replicate so that t is subtracted from each corner
+        vizCone = np.linalg.inv(r)@vizCone
+>>>>>>> f0a8cdf799ef952221f8e11427c10928e0d8920e
 
         return np.array([ul, br])
 
