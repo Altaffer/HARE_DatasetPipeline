@@ -106,33 +106,37 @@ class CameraCombo:
 
             # use K to compute vision on the ground
             rgb_ground_points = self.visionCone(PI_W, PI_H, rot, trans, rbg_K)
-            noir_ground_points = self.visionCone(PI_W, PI_H, rot, trans, noir_K)
-            flir_ground_points = self.visionCone(F_W, F_H, rot, trans, flir_K)
+            # noir_ground_points = self.visionCone(PI_W, PI_H, rot, trans, noir_K)
+            # flir_ground_points = self.visionCone(F_W, F_H, rot, trans, flir_K)
 
             # print(rgb_ground_points[0])
 
             # put data into reasonable format
-            if POINTS_FORMAT == 1:
-                # save a list of all of the ground points (ie. xma = {xma_rgb, xma_noir, xma_flir})
-                xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0]]
-                yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1]]
-                xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0]]
-                ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1]]
+            # if POINTS_FORMAT == 1:
+            #     # save a list of all of the ground points (ie. xma = {xma_rgb, xma_noir, xma_flir})
+            #     xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0]]
+            #     yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1]]
+            #     xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0]]
+            #     ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1]]
 
-            elif POINTS_FORMAT == 2:
-                # save all the data (ie. xma = {xma_com, xma_rgb, xma_noir, xma_flir})
-                xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0], min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])]
-                yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1], min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])]
-                xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0], min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])]
-                ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1], min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])]
+            # elif POINTS_FORMAT == 2:
+            #     # save all the data (ie. xma = {xma_com, xma_rgb, xma_noir, xma_flir})
+            #     xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0], min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])]
+            #     yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1], min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])]
+            #     xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0], min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])]
+            #     ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1], min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])]
 
-            else: # POINTS_FORMAT == 0 as well
-                # figure out the intersection of the ground points such that clicks will only register if seen by all 3 cameras
-                xma = min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])
-                yma = min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])
-                xmi = min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])
-                ymi = min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])
+            # else: # POINTS_FORMAT == 0 as well
+            #     # figure out the intersection of the ground points such that clicks will only register if seen by all 3 cameras
+            #     xma = min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])
+            #     yma = min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])
+            #     xmi = min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])
+            #     ymi = min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])
 
+            xma = rgb_ground_points[0,0]
+            yma = rgb_ground_points[0,1]
+            xmi = rgb_ground_points[1,0]
+            ymi = rgb_ground_points[1,1]
 
             # create 4x4 matrix for pose
             pose = np.concatenate((rot, np.expand_dims(trans, axis=0).T), axis=1)
@@ -187,33 +191,55 @@ class CameraCombo:
             """
 
         # the corners of the image
-        ul = [0,0,1]
+        ul = np.array([0,0,1]).T
         ur = [0,w-1,1]
-        br = [h-1,w-1,1]
+        br = np.array([h-1,w-1,1]).T
         bl = [h-1,0,1]
         # corners = np.array([ul, br]).T  # corners is a 3x2 matrix
         corners = np.array([ul, ur, bl, br]).T  # corners is a 3x4 matrix
 
         # convert pixels to world units
         if K is not False:
-            vizCone = np.linalg.inv(K)@corners
+            # vizCone = np.linalg.inv(K)@corners
+            ul = np.dot(np.linalg.inv(K), ul)
+            br = np.dot(np.linalg.inv(K), br)
         else:
             vizCone = corners
-        vizCone *= ASSUMED_ALTITUDE  # scale to altitude
+        # print('before rescale', vizCone)
+        # vizCone /= vizCone[2,:]
+        # vizCone *= ASSUMED_ALTITUDE  # scale to altitude
+        # print('after rescale', vizCone)
 
-        # Nick, honest to god, I don't know what you're doing here
-        if K.all() == rbg_K.all():
-            self.rg_fov_check.append(vizCone)
-        if K.all() == noir_K.all():
-            self.no_fov_check.append(vizCone)
-        if K.all() == flir_K.all():
-            self.fl_fov_check.append(vizCone)
+        print(ul, br)
+        # t_m = np.tile(t, (4, 1))
+        # print(t_m.T)
         
         # complete back-projection
-        vizCone -= t  # replicate so that t is subtracted from each corner
-        vizCone = np.linalg.inv(r)@vizCone
+        # vizCone -= t_m.T  # replicate so that t is subtracted from each corner
+        # vizCone = np.linalg.inv(r)@vizCone
 
-        return vizCone
+        # create pose mtx
+        pose = np.concatenate((r, np.expand_dims(t, axis=1)), axis=1)
+        pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
+
+        # pad = np.array([[1, 1, 1, 1]])
+        # h_viz = np.concatenate((vizCone, pad), axis=0)
+        # vizCone = np.linalg.inv(pose)@h_viz
+
+        ul = ul + t
+        br = br + t
+
+        yaw = np.array([[0, -1, 0],
+                        [1, 0, 0],
+                        [0, 0, 1]])
+        r = r@yaw
+
+        ul = np.dot(np.linalg.inv(r), ul)
+        br = np.dot(np.linalg.inv(r), br)
+
+        print(ul, br)
+
+        return np.array([ul, br])
 
 
     def pretty_image(self, pt, img_loc):
