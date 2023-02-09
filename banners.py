@@ -25,12 +25,18 @@ POINTS_FORMAT = 0
 
 PI_W = 1920
 PI_H = 1080
+PI_FOV = 55
 F_W = 640
 F_H = 512
+F_FOV = 55
 
 rbg_K = np.array([[679.0616691224743, 0.0, 866.4845535612815],
                   [0.0, 679.7611413287517, 593.4758325974849],
                   [0, 0, 1]])
+
+offset_rgb = np.array([[1, 0, 0.48],
+                       [0, -1, -0.3],
+                       [0, 0, 1]])
 noir_K = np.array([[677.6841664243713, 0.0, 927.0775869012278],
                   [0.0, 678.3384456258163, 545.5178145289105],
                   [0, 0, 1]])
@@ -77,7 +83,7 @@ flir_K = np.array([[250, 0, F_W/2],
 # TOPICS = ['/current_pose', '/cam0/camera/image_raw', '/cam1/camera/image_raw', '/therm/image_raw_throttle']
 CAM_LIST = ['rgb', 'noIR', 'thermal']
 
-cols = ["xmax", "ymax", "xmin", "ymin", "pose", "save_loc"]
+cols = ["pose", "save_loc"]
 
 class CameraCombo:
     def __init__(self, dir_data):
@@ -91,7 +97,7 @@ class CameraCombo:
         self.no_fov_check = []
         self.fl_fov_check = []
     
-    def stack(self, time):
+    def stack(self, time, clicks):
         # check if all images are not none
         if self.rgb and self.flir and self.noir:        
             s = {"rgb": self.rgb, 
@@ -102,10 +108,14 @@ class CameraCombo:
             pickle.dump(s, open(loc, "wb"))
             
             rot = R.from_quat([self.pose.orientation.x, self.pose.orientation.y, self.pose.orientation.z, self.pose.orientation.w]).as_matrix()
-            trans = np.array([self.pose.position.x, self.pose.position.y, self.pose.position.z])
+            trans = np.array([[self.pose.position.x, self.pose.position.y, self.pose.position.z]]).T
+
+            # make a 4x4 pose matrix
+            pose = np.concatenate((rot, trans), axis=1)
+            pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
 
             # use K to compute vision on the ground
-            rgb_ground_points = self.visionCone(PI_W, PI_H, rot, trans, rbg_K)
+            rgb_ground_points = self.visionCone(self.pose.position.z, FOV_angle, eps=0)
             # noir_ground_points = self.visionCone(PI_W, PI_H, rot, trans, noir_K)
             # flir_ground_points = self.visionCone(F_W, F_H, rot, trans, flir_K)
 
@@ -135,16 +145,12 @@ class CameraCombo:
 
             xma = rgb_ground_points[0,0]
             yma = rgb_ground_points[0,1]
-            xmi = rgb_ground_points[1,0]
-            ymi = rgb_ground_points[1,1]
-
-            # create 4x4 matrix for pose
-            pose = np.concatenate((rot, np.expand_dims(trans, axis=0).T), axis=1)
-            pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
+            xmi = rgb_ground_points[2,0]
+            ymi = rgb_ground_points[2,1]
 
 
             # save stack save location, pose, date, and coords to dataframe
-            self.parsed.loc[len(self.parsed.index)] = [xma, yma, xmi, ymi, pose, loc]
+            self.parsed.loc[len(self.parsed.index)] = [pose, loc]
 
 
     def done(self):
@@ -166,80 +172,13 @@ class CameraCombo:
         self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
 
-    def get_frames(self, x, y):
-        got_frames = self.parsed.loc[(self.parsed["xmax"] > x) & (self.parsed["xmin"] < x) &
-                        (self.parsed["ymax"] > y) & (self.parsed["ymin"] < y)]['save_loc']
-
-        print(got_frames)
-        return got_frames
-
-
-    def visionCone(self, w, h, r, t, K=False):
-        """ Computes the world positions of frame corners.
+    def visionCone(self, altitude, FOV_angle, eps=0):
+        ## TODO: this needs a test function/harness, i.e. put it into the frame
         
-        Inputs:
-            w, scalar = frame width, pixels
-            h, scalar = frame height, pixels
-            r, matrix = rotation matrix from last frame POV, decoded from heading quaternion
-            TODO: r may need to be augmented by the last (few?) headings, for rotation relative to last frame
-            t, vector = translation from last frame POV 
-            K, matrix = intrinsics matrix, or False if no calibration is available/needed
-            
-        Returns:
-            vizCone, matrix = matrix whose columns are the real-world coordinates of the frame corners in
-                    the camera reference frame, ordered [ ul | ur | bl | br ]
-            """
-
-        # the corners of the image
-        ul = np.array([0,0,1]).T
-        ur = [0,w-1,1]
-        br = np.array([h-1,w-1,1]).T
-        bl = [h-1,0,1]
-        # corners = np.array([ul, br]).T  # corners is a 3x2 matrix
-        corners = np.array([ul, ur, bl, br]).T  # corners is a 3x4 matrix
-
-        # convert pixels to world units
-        if K is not False:
-            # vizCone = np.linalg.inv(K)@corners
-            ul = np.dot(np.linalg.inv(K), ul)
-            br = np.dot(np.linalg.inv(K), br)
-        else:
-            vizCone = corners
-        # print('before rescale', vizCone)
-        # vizCone /= vizCone[2,:]
-        # vizCone *= ASSUMED_ALTITUDE  # scale to altitude
-        # print('after rescale', vizCone)
-
-        print(ul, br)
-        # t_m = np.tile(t, (4, 1))
-        # print(t_m.T)
-        
-        # complete back-projection
-        # vizCone -= t_m.T  # replicate so that t is subtracted from each corner
-        # vizCone = np.linalg.inv(r)@vizCone
-
-        # create pose mtx
-        pose = np.concatenate((r, np.expand_dims(t, axis=1)), axis=1)
-        pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
-
-        # pad = np.array([[1, 1, 1, 1]])
-        # h_viz = np.concatenate((vizCone, pad), axis=0)
-        # vizCone = np.linalg.inv(pose)@h_viz
-
-        ul = ul + t
-        br = br + t
-
-        yaw = np.array([[0, -1, 0],
-                        [1, 0, 0],
-                        [0, 0, 1]])
-        r = r@yaw
-
-        ul = np.dot(np.linalg.inv(r), ul)
-        br = np.dot(np.linalg.inv(r), br)
-
-        print(ul, br)
-
-        return np.array([ul, br])
+        horz = altitude * np.cos((FOV_angle - eps)/2)
+        vert = altitude * np.cos((FOV_angle - eps)/2)
+        cone = [-horz, horz, -vert, vert]
+        return cone
 
 
     def pretty_image(self, pt, img_loc):
