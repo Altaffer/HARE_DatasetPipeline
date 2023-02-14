@@ -52,31 +52,6 @@ flir_K = np.array([[250, 0, F_W/2],
       3.) mark each frame with visible GPS clicks with the regions designated by the GPS clicks
             i. I will need to copy video frames to directories dedicated for annotations
             ii. What is the format of an annotation?
-
-
-## As of 2022-10-10, the bag has structure:
-  /cam0/camera/image_raw                      # imagery
-  /cam1/camera/image_raw                      # imagery
-  /clicked_point
-  /clock
-  /dji_osdk_ros/attitude                      
-  /dji_osdk_ros/battery_state
-  /dji_osdk_ros/flight_status
-  /dji_osdk_ros/gps_position                  # this one for world position
-  /dji_osdk_ros/height_above_takeoff          
-  /dji_osdk_ros/imu                           # this one for orientation (heading)
-  /dji_osdk_ros/local_position                # this one for live altitude, camera origin/position
-  /dji_osdk_ros/rc
-  /dji_osdk_ros/rc_connection_status
-  /dji_osdk_ros/velocity
-  /initialpose
-  /move_base_simple/goal
-  /rosout
-  /rosout_agg
-  /tf
-  /tf_static
-  /therm/image_raw_throttle                   # imagery
-  /ublox/fix
 """
 
 ### idea: take topics and msg types as lists w/ 1:1 correspondence, zip lists
@@ -86,8 +61,8 @@ CAM_LIST = ['rgb', 'noIR', 'thermal']
 cols = ["pose", "save_loc"]
 
 class CameraCombo:
-    def __init__(self, dir_data):
-        self.dir = dir_data
+    def __init__(self):
+        self.dir = None
         self.rgb = None
         self.noir = None
         self.flir = None
@@ -97,7 +72,7 @@ class CameraCombo:
         self.no_fov_check = []
         self.fl_fov_check = []
     
-    def stack(self, time, clicks):
+    def stack(self, time):
         # check if all images are not none
         if self.rgb and self.flir and self.noir:        
             s = {"rgb": self.rgb, 
@@ -105,7 +80,8 @@ class CameraCombo:
                 "flir": self.flir}
             loc = os.path.join(os.path.join(self.dir.path, 'stacks/'), "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin")
             # send stack to binary file
-            pickle.dump(s, open(loc, "wb"))
+            with open(loc, 'wb') as f:
+                pickle.dump(s, f)
             
             rot = R.from_quat([self.pose.orientation.x, self.pose.orientation.y, self.pose.orientation.z, self.pose.orientation.w]).as_matrix()
             trans = np.array([[self.pose.position.x, self.pose.position.y, self.pose.position.z]]).T
@@ -114,69 +90,29 @@ class CameraCombo:
             pose = np.concatenate((rot, trans), axis=1)
             pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
 
-            # use K to compute vision on the ground
-            rgb_ground_points = self.visionCone(self.pose.position.z, FOV_angle, eps=0)
-            # noir_ground_points = self.visionCone(PI_W, PI_H, rot, trans, noir_K)
-            # flir_ground_points = self.visionCone(F_W, F_H, rot, trans, flir_K)
-
-            # print(rgb_ground_points[0])
-
-            # put data into reasonable format
-            # if POINTS_FORMAT == 1:
-            #     # save a list of all of the ground points (ie. xma = {xma_rgb, xma_noir, xma_flir})
-            #     xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0]]
-            #     yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1]]
-            #     xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0]]
-            #     ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1]]
-
-            # elif POINTS_FORMAT == 2:
-            #     # save all the data (ie. xma = {xma_com, xma_rgb, xma_noir, xma_flir})
-            #     xma = [rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0], min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])]
-            #     yma = [rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1], min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])]
-            #     xmi = [rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0], min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])]
-            #     ymi = [rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1], min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])]
-
-            # else: # POINTS_FORMAT == 0 as well
-            #     # figure out the intersection of the ground points such that clicks will only register if seen by all 3 cameras
-            #     xma = min(rgb_ground_points[0][0], noir_ground_points[0][0], flir_ground_points[0][0])
-            #     yma = min(rgb_ground_points[0][1], noir_ground_points[0][1], flir_ground_points[0][1])
-            #     xmi = min(rgb_ground_points[1][0], noir_ground_points[1][0], flir_ground_points[1][0])
-            #     ymi = min(rgb_ground_points[1][1], noir_ground_points[1][1], flir_ground_points[1][1])
-
-            xma = rgb_ground_points[0,0]
-            yma = rgb_ground_points[0,1]
-            xmi = rgb_ground_points[2,0]
-            ymi = rgb_ground_points[2,1]
-
-
             # save stack save location, pose, date, and coords to dataframe
             self.parsed.loc[len(self.parsed.index)] = [pose, loc]
 
 
-    def done(self):
-        # # check that all fovs are good
-        # if self.rg_fov_check.count(self.rg_fov_check[0].all()) == len(self.rg_fov_check):
-        #     print("all rgb FOVs are the same")
-        # else:
-        #     print("SOMETHING WRONG WITH RGB FOV")
-        # if self.no_fov_check.count(self.no_fov_check[0].all()) == len(self.no_fov_check):
-        #     print("all noir FOVs are the same")
-        # else:
-        #     print("SOMETHING WRONG WITH NOIR FOV")
-        # if self.fl_fov_check.count(self.fl_fov_check[0].all()) == len(self.fl_fov_check):
-        #     print("all flir FOVs are the same")
-        # else:
-        #     print("SOMETHING WRONG WITH FLIR FOV")
-        
-        
+    def done(self):  
         self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
 
-    def visionCone(self, altitude, FOV_angle, eps=0):
+    def uptake(self):
+        self.parsed = pd.read_pickle(os.path.join(self.dir.path, "parsed.pkl"))
+
+    
+    def visCone(self, pose, FOV_angle, eps=0):
+        
         ## TODO: this needs a test function/harness, i.e. put it into the frame
         
-        horz = altitude * np.cos((FOV_angle - eps)/2)
-        vert = altitude * np.cos((FOV_angle - eps)/2)
+        FOV_angle -= eps    # subtract fudge factor, defaulted to 0
+        FOV_angle *= np.pi  # convert to radians
+        FOV_angle /= 180    
+        FOV_angle /= 2      # cone edges relative to center
+
+        horz = pose[2,3] * np.sin(FOV_angle)
+        vert = pose[2,3] * np.sin(FOV_angle)
         cone = [-horz, horz, -vert, vert]
         return cone
 
@@ -188,6 +124,7 @@ class CameraCombo:
         x = row.xmax - pt[0]
         y = row.ymax - pt[1]
         print(x, y)
+
 
 @dataclass
 class Dir:
