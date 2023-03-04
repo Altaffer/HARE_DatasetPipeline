@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import cv2
 import rosbag
 import utm
@@ -8,6 +6,7 @@ import rospy
 from dataclasses import dataclass
 import pandas as pd
 import pickle
+import csv
 
 import numpy as np
 
@@ -16,8 +15,6 @@ from std_msgs.msg import UInt8
 from sensor_msgs.msg import Imu, NavSatFix, Image
 from geometry_msgs.msg import PointStamped, PoseWithCovarianceStamped, Pose
 from scipy.spatial.transform import Rotation as R
-
-import csv_relations
 
 ASSUMED_ALTITUDE = 10 #m
 
@@ -30,9 +27,10 @@ F_W = 640
 F_H = 512
 F_FOV = 55
 
-rbg_K = np.array([[679.0616691224743, 0.0, 866.4845535612815],
-                  [0.0, 679.7611413287517, 593.4758325974849],
+rgb_K = np.array([[3328.72744368, 0.0, 985.2442405],
+                  [0.0, 3318.46036526, 489.0953335],
                   [0, 0, 1]])
+rgb_dist = np.array([-0.33986049, -0.49477998,  0.00326809, -0.00230553])
 
 offset_rgb = np.array([[1, 0, 0.48],
                        [0, -1, -0.3],
@@ -44,15 +42,13 @@ flir_K = np.array([[250, 0, F_W/2],
                    [0, 250, F_H/2],
                    [0, 0, 1]])
 
-"""
-## The role of this software is to 
-      1.) compute the intersection of the cone of vision with the ground
-            i. I don't think I need to load images
-      2.) check that region for GPS clicks
-      3.) mark each frame with visible GPS clicks with the regions designated by the GPS clicks
-            i. I will need to copy video frames to directories dedicated for annotations
-            ii. What is the format of an annotation?
-"""
+
+@dataclass
+class Dir:
+    path: str
+    date: str
+    bag: str = None
+    clicks: str = None
 
 ### idea: take topics and msg types as lists w/ 1:1 correspondence, zip lists
 # TOPICS = ['/current_pose', '/cam0/camera/image_raw', '/cam1/camera/image_raw', '/therm/image_raw_throttle']
@@ -78,11 +74,13 @@ class CameraCombo:
             s = {"rgb": self.rgb, 
                 "noir": self.noir, 
                 "flir": self.flir}
-            loc = os.path.join(os.path.join(self.dir.path, 'stacks/'), "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin")
+            loc = str(os.path.join(os.path.join(self.dir.path, 'stacks/'), "stacked_"+str(time.secs) + '.' + str(time.nsecs)+".bin"))
             # send stack to binary file
             with open(loc, 'wb') as f:
+                # print('dumping stack')
                 pickle.dump(s, f)
             
+
             rot = R.from_quat([self.pose.orientation.x, self.pose.orientation.y, self.pose.orientation.z, self.pose.orientation.w]).as_matrix()
             trans = np.array([[self.pose.position.x, self.pose.position.y, self.pose.position.z]]).T
 
@@ -92,20 +90,29 @@ class CameraCombo:
 
             # save stack save location, pose, date, and coords to dataframe
             self.parsed.loc[len(self.parsed.index)] = [pose, loc]
+            self.flir = None
+            self.noir = None
+            self.rgb = None
 
+    
+    # undistort the raw frame for input to pretty_image
+    def undistort(self, img, mtx, dist):
+        w = img.shape[1]
+        h = img.shape[0]
+        newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
+        # undistort
+        mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w,h), 5)
+        dst = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
+        # crop the image
+        x, y, w, h = roi
+        dst = dst[y:y+h, x:x+w]
+        return dst
 
     def done(self):  
         self.parsed.to_pickle(os.path.join(self.dir.path, "parsed.pkl"))
 
-
-    def uptake(self):
-        self.parsed = pd.read_pickle(os.path.join(self.dir.path, "parsed.pkl"))
-
     
-    def visCone(self, pose, FOV_angle, eps=0):
-        
-        ## TODO: this needs a test function/harness, i.e. put it into the frame
-        
+    def visCone(self, pose, FOV_angle, eps=0):        
         FOV_angle -= eps    # subtract fudge factor, defaulted to 0
         FOV_angle *= np.pi  # convert to radians
         FOV_angle /= 180    
@@ -126,10 +133,48 @@ class CameraCombo:
         print(x, y)
 
 
-@dataclass
-class Dir:
-    path: str
-    date: str
-    bag: str = None
-    clicks: str = None
+aug_cols = ["x", "y", "health"]
 
+class CSVAugmented:
+    def __init__(self, file, root):
+        self.csv_file = file
+        self.root = root
+        self.click_data = pd.DataFrame(columns=aug_cols)
+
+    def done(self):  
+        self.click_data.to_pickle(os.path.join(self.root, "related.pkl"))
+        # with open(os.path.join('data/test_dir/', "related.pkl"), 'wb') as f:
+        #     pickle.dump(self.__dict__, f, protocol=2)
+
+
+    # def uptake(self):
+    #     self.click_data = pd.read_pickle(os.path.join(self.root, "related.pkl"))
+
+
+    def csv_read(self):
+        origin = None
+        with open(self.csv_file) as clicks:
+            reader = csv.reader(clicks)
+            for line in reader:
+                if origin == None:
+                    origin = [float(line[0]), float(line[1]), float(line[2])]
+                # breakdown line
+                u = utm.from_latlon(float(line[0]), float(line[1]))
+                # u = pm.geodetic2ned(float(line[0]), float(line[1]), float(line[2]), origin[0], origin[1], origin[2])
+                # print(u)
+                health = int(line[-1])
+                
+                self.click_data.loc[len(self.click_data.index)] = [u[0], u[1], health]
+
+    """ get the clicks within the FOV """
+    def get_pts(self, pose, cone):
+        got_points = self.click_data.loc[(self.click_data['x'] > cone[0] + pose[0,3] ) & 
+                            (self.click_data['x'] < cone[1] + pose[0,3] ) & 
+                            (self.click_data['y'] > cone[2] + pose[1,3] ) & 
+                            (self.click_data['y'] < cone[3] + pose[1,3] )]
+        return got_points
+        
+
+# def done(fname, obj):
+#     with open(fname, 'wb') as f:
+#         pickle.dump(obj, f, protocol=2)

@@ -1,8 +1,12 @@
 import pandas as pd
 from banners import *
-import csv_relations
 import numpy as np
 import cv2
+from cv_bridge import CvBridge
+from sensor_msgs.msg import Image
+from scipy.spatial.transform import Rotation as R
+
+bridge = CvBridge()
 
 cols = ['stack_location', 'robot_x', 'robot_y', 'pixel_points', 'health']
 
@@ -13,10 +17,10 @@ F_W = 640
 F_H = 512
 F_FOV = 55
 
-rbg_K = np.array([[679.0616691224743, 0.0, 866.4845535612815],
-                  [0.0, 679.7611413287517, 593.4758325974849],
+rgb_K = np.array([[3328.72744368, 0.0, 985.2442405],
+                  [0.0, 3318.46036526, 489.0953335],
                   [0, 0, 1]])
-rbg_dist = np.array([-0.22658516071521045, 0.04799750990896024, 0.0003471450894650341, -0.00048311114989200163])
+rgb_dist = np.array([-0.33986049, -0.49477998,  0.00326809, -0.00230553])
 
 noir_K = np.array([[677.6841664243713, 0.0, 927.0775869012278],
                   [0.0, 678.3384456258163, 545.5178145289105],
@@ -40,30 +44,39 @@ class Relater:
                 health = pts['health']
                 location = row['save_loc']
                 pts = self.convert_to_local(p, pts)
-                print(pts)
-                pxs = self.fProject(pts, rbg_K)
+                # print(pts)
+                pxs = self.fProject(pts, rgb_K)
                 c2i_df.loc[len(c2i_df.index)] = [location, p[0,3], p[1,3], pxs, health]
         return c2i_df
 
 
     # make points relative to the robot pose 
     def convert_to_local(self, pose, pts):
+        # make points 4d
+        p = np.asarray(pts.loc[:,['x', 'y']])
+        p = np.concatenate((p, np.zeros((1, p.shape[0]))), axis=1)
+        p = np.concatenate((p, np.ones((1, p.shape[0]))), axis=1)
+        # print(p)
+        tf_pts = np.linalg.inv(pose)[:3, :]@p.T
+        # print(p.shape)
+        return tf_pts
+    
+    def convert_to_local_og(self, pose, pts):
+        # pitch down 90deg
+        offset = np.array([[1, 0, 0],
+                           [0, 1, 0],
+                           [0, 0, 1]])
+
         p = np.asarray(pts.loc[:,['x', 'y']])
         p = p - np.array([pose[0,3], pose[1,3]])
-        p = np.concatenate((p, np.array([[10]])), axis=1)
+        p = np.concatenate((p, np.array([[pose[2,3]]])), axis=1)
         # print(p.shape)
-        return np.linalg.inv(np.array(pose[:3,:3]))@p.T
-
-    # undistort the raw frame for input to pretty_image
-    def undistort(self, img, mtx, dist, w, h):
-        newcameramtx, roi = cv2.getOptimalNewCameraMatrix(mtx, dist, (w,h), 1, (w,h))
-        # undistort
-        mapx, mapy = cv2.initUndistortRectifyMap(mtx, dist, None, newcameramtx, (w,h), 5)
-        dst = cv2.remap(img, mapx, mapy, cv2.INTER_LINEAR)
-        # crop the image
-        x, y, w, h = roi
-        dst = dst[y:y+h, x:x+w]
-        return dst
+        # return np.linalg.inv(np.array(pose[:3,:3])@offset)@p.T
+        rot = R.from_matrix(np.array(pose[:3,:3]))
+        eul = rot.as_euler('xyz', degrees=True)
+        e = R.from_euler('xyz', [eul[0]*-1, eul[1]*-1, eul[2]], degrees=True)
+        rot2 = e.as_matrix()
+        return offset@p.T
         
     # forward project points into image
     def fProject(self, points, K):
@@ -74,4 +87,18 @@ class Relater:
         p = K@points
         p = p / p[-1, :]
         return p[:2, :]
+
+    # def pretty_image(df, idx, D):
+    #     row = df.iloc[idx]
+    #     with open(row['stack_location'], 'rb') as f:
+    #         stack = pickle.load(f)
+            
+    #         rgb = bridge.imgmsg_to_cv2(stack['rgb'], desired_encoding='passthrough')
+    #         print(rgb.shape)
+    #         rgb = D.undistort(rgb, rgb_K, rgb_dist)
+    #         points = row['pixel_points']
+    #         print(points[0].item(), points[1])
+    #         rgb = cv2.circle(rgb, (int(points[0].item()), int(points[1].item())), 25, (0, 0, 255), 4)
+    #         # plt.imshow(rgb)
+    #         return rgb
         
