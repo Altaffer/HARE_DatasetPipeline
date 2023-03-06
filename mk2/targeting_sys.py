@@ -6,19 +6,24 @@ import time
 import pickle
 
 HIGH = 1
-THRESHOLD1 = 0.75
+THRESHOLD1 = 0.25
 THRESHOLD1 *= 255
 THRESHOLD1 = int(THRESHOLD1)
 THRESHOLD2 = 0.9
 THRESHOLD2 *= 255
 THRESHOLD2 = int(THRESHOLD2)
-BLUR_ITER = 4
-BLUR_KERNEL = (9,9)
-BLUR_GAUSSVAR = 0.5  # Very important hyperparameter
+BLUR_ITER = 8
+BLUR_KERNEL = (15,15)
+BLUR_GAUSSVAR = 1  # Very important hyperparameter
 
 template = cv2.imread('mk2/Screenshot from 2023-03-02 22-26-11.png')
 GLOWUP = 275
-
+# font
+font = cv2.FONT_HERSHEY_SIMPLEX
+# fontScale
+fontScale = 3
+# Line thickness of 2 px
+thickness = 5
 
 
 # input      bag and csv 
@@ -54,7 +59,7 @@ def preprocess(datadir):
 # it reurns a dataframe 
 def findRelations(cam_combo):
     D = Relater(cam_combo.flight_name)
-    return D.clicks_to_image(30)
+    return D.clicks_to_image(25)
 
 
 # input      list of stacks
@@ -68,35 +73,83 @@ def getFrameTarget(frame):  # frame is cc_parsed
     
     # frame = cv2.convertScaleAbs(frame, alpha = alpha, beta = beta)
     # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    val = frame
+    frame = frame.astype('float64')
+    # print(frame.shape)
+    frame = frame[:,:,0] * frame[:,:,1] * frame[:,:,2]
+    peaky = frame.copy()
+    frame *= 255.0/frame.max()
+    frame = frame.astype('uint8')
     
-    # print(type(frame))
+    # print(frame.shape)
     # print(type(frame[0,0]))
 
 
     # print(f'val.shape: {val.shape}') #1920x1080 -> 1036x1888
     for _ in range(BLUR_ITER):
-        val = cv2.GaussianBlur(id(val), BLUR_KERNEL, BLUR_GAUSSVAR)
-        val = cv2.threshold(id(val), THRESHOLD2, HIGH, cv2.THRESH_BINARY)
-        # val = cv2.Canny(val, 30, 200)  # an alternative to binary thresholding
+        frame = cv2.GaussianBlur(frame, BLUR_KERNEL, BLUR_GAUSSVAR)
+        # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
+        # _, val = cv2.Canny(val, 30, 200)  # an alternative to binary thresholding
+
+    blur_data = frame.copy().flatten()
+    counts, bins = np.histogram(blur_data, 255)
+    mids = 0.5*(bins[1:] + bins[:-1])
+    probs = counts / np.sum(counts)
+
+    mean = np.sum(probs * mids)  
+    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
+    # print(blur_data)
+    print(mean, sd)
+
+    frame[frame < mean + (3*sd)] = 0
+
+    counts, bins = np.histogram(frame.copy().flatten(), 255)
+    mids = 0.5*(bins[1:] + bins[:-1])
+    probs = counts / np.sum(counts)
+
+    mean = np.sum(probs * mids)  
+    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
+    # print(blur_data)
+    print(mean, sd)
+
+    frame[frame < mean + (1*sd)] = 0
+
+    # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
 
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, BLUR_KERNEL)
-    cv2.morphologyEx(id(val), cv2.MORPH_GRADIENT, kernel, iterations=BLUR_ITER)
+    cv2.morphologyEx(frame, cv2.MORPH_GRADIENT, kernel, iterations=BLUR_ITER)
+    
+    first_blur = frame.copy()
 
     for _ in range(BLUR_ITER):
-        val = cv2.GaussianBlur(id(val), BLUR_KERNEL, BLUR_GAUSSVAR)
-        val = cv2.threshold(id(val), THRESHOLD2, HIGH, cv2.THRESH_BINARY)
+        frame = (frame//2)**2
+        frame = cv2.GaussianBlur(frame, BLUR_KERNEL, BLUR_GAUSSVAR)
+        # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
         
+
+
+    # fit a double gaussian and the higher value smaller hump is the thing you are looking for
+     
     # val = cv2.cvtColor(val, cv2.COLOR_RGB2GRAY)
-    c, h = cv2.findContours(id(val), cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+    c, h = cv2.findContours(frame, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
     # print(c)
     # a = cv2.contourArea(c)
+    c.sort(key = len)
     # val3 = val2.copy()
-    # for cont in c:
-    #     approx = cv2.approxPolyDP(cont, 5, True)    
-    val = cv2.drawContours(image=val, contours=c, contourIdx=-1, hierarchy=h, color=(255, 0, 0), thickness=10)
+    for cont in c:
+        approx = cv2.approxPolyDP(cont, 4, True)
+        if len(approx) == 8:
+            # print('yoohoo!', approx)    
+            frame = cv2.drawContours(image=frame, contours=[approx], contourIdx=-1, color=(255, 255, 0), thickness=10)
+            # print(approx[0])
+            frame = cv2.putText(frame, 'this one!', tuple(approx[0,0]), font, fontScale, (255, 255, 0), thickness, cv2.LINE_AA)
+    # approx = cv2.approxPolyDP(c[1], 5, True)    
+    # frame = cv2.drawContours(image=frame, contours=[approx], contourIdx=-1, color=(255, 255, 0), thickness=10)
+    # frame = cv2.putText(frame, 'this is the one', tuple(approx[0,0]), font, fontScale, (255, 255, 0), thickness, cv2.LINE_AA)
 
-    return val
+
+    # frame = cv2.drawContours(image=frame, contours=c, contourIdx=-1, hierarchy=h, color=(255, 0, 0), thickness=10)
+
+    return frame, peaky, first_blur, blur_data
 
 
 def findSquare(frame):
@@ -144,24 +197,24 @@ def prettyImage(cc):
             # img_loc, pred_pixel_x, pred_pixel_y
             print(row)
             # rgb = cv2.imread(row[7]) # for using flight data raw
-            rgb = cv2.imread(row[0], 0)
+            rgb = cv2.imread(row[0])
             rgb = cv2.undistort(rgb, rgb_K, rgb_dist)
             rgb = cv2.flip(rgb, 0)
 
-            frame = getFrameTarget(rgb)
+            frame, val, blur, data = getFrameTarget(rgb)
             # found_squares += a
             # f = rgb & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
             # f, tl, br = findSquare(rgb)
-            plt.imshow(frame)
-            # fig, ax = plt.subplots(2, 2, figsize=(12, 7))
-            # # fig
-            # ax[0][0].imshow(frame)
-            # # f = f & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
-            # # f = cv2.rectangle(f,tl, br,(255,255,255),7)
-            # ax[0][1].imshow(val)
-            # # ax[0][2].imshow(blur)
-            # ax[1][0].imshow(val2)
-            # ax[1][1].imshow(val3)
+            # plt.imshow(frame)
+            fig, ax = plt.subplots(2, 2, figsize=(12, 7))
+            # fig
+            ax[0][0].imshow(frame)
+            # f = f & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
+            # f = cv2.rectangle(f,tl, br,(255,255,255),7)
+            ax[0][1].imshow(val)
+            ax[1][0].imshow(blur)
+            
+            ax[1][1].hist(blur[blur > 0].flatten(), 255)
             # ax[5].imshow(kp)
 
             plt.savefig(f'IMG_FOR_TEST_{time.time()}.png')  # may need png instead of eps
