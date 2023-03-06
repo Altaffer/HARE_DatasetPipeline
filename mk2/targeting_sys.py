@@ -1,3 +1,6 @@
+# rm *.png; python3 mk2/targeting_sys.py
+
+
 from banners_mk2 import *
 # from data_relater import *
 import cv2
@@ -98,7 +101,7 @@ def getFrameTarget(frame):  # frame is cc_parsed
     mean = np.sum(probs * mids)  
     sd = np.sqrt(np.sum(probs * (mids - mean)**2))
     # print(blur_data)
-    print(mean, sd)
+    # print(mean, sd)
 
     frame[frame < mean + (3*sd)] = 0
 
@@ -109,7 +112,7 @@ def getFrameTarget(frame):  # frame is cc_parsed
     mean = np.sum(probs * mids)  
     sd = np.sqrt(np.sum(probs * (mids - mean)**2))
     # print(blur_data)
-    print(mean, sd)
+    # print(mean, sd)
 
     frame[frame < mean + (1*sd)] = 0
 
@@ -120,11 +123,15 @@ def getFrameTarget(frame):  # frame is cc_parsed
     
     first_blur = frame.copy()
 
+    frame = (frame//2)**1.8
     for _ in range(BLUR_ITER):
-        frame = (frame//2)**2
         frame = cv2.GaussianBlur(frame, BLUR_KERNEL, BLUR_GAUSSVAR)
         # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
         
+    # print(type(frame[0,0]))
+
+    frame *= 255.0/frame.max()
+    frame = frame.astype('uint8')
 
 
     # fit a double gaussian and the higher value smaller hump is the thing you are looking for
