@@ -17,7 +17,7 @@ THRESHOLD2 *= 255
 THRESHOLD2 = int(THRESHOLD2)
 BLUR_ITER = 8
 BLUR_KERNEL = (15,15)
-BLUR_GAUSSVAR = 1  # Very important hyperparameter
+BLUR_GAUSSVAR = 10  # Very important hyperparameter
 
 template = cv2.imread('mk2/Screenshot from 2023-03-02 22-26-11.png')
 GLOWUP = 275
@@ -51,6 +51,7 @@ def preprocess(datadir):
                 B.noir = msg
             if topic == "/current_pose":
                 B.pose = msg
+                # print('stacking')
                 B.stack(t)
 
         B.csv_read(datadir.clicks)
@@ -65,132 +66,139 @@ def findRelations(cam_combo):
     return D.clicks_to_image(25)
 
 
-# input      list of stacks
-# return     the stack name with a computed blob center 
-# # this pulls the target from individual frames with blob detection
-def getFrameTarget(frame):  # frame is cc_parsed
-    # print(f'frame.shape: {frame.shape}')
-    # normalize frame brightness
-    alpha = 1.25
-    beta = 0
+def showTrajectory(plot):
+    db_c = sqlite3.connect('drone_disease.db')
+    cur = db_c.cursor()
+    # get position of clicks
+    res = cur.execute(f"SELECT x, y FROM clicks_{'night_out'}")
+    clicks = cur.fetchall()
+    clicks = np.array(clicks)
     
-    # frame = cv2.convertScaleAbs(frame, alpha = alpha, beta = beta)
-    # frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    frame = frame.astype('float64')
-    # print(frame.shape)
-    frame = frame[:,:,0] * frame[:,:,1] * frame[:,:,2]
-    peaky = frame.copy()
-    frame *= 255.0/frame.max()
-    frame = frame.astype('uint8')
-    
-    # print(frame.shape)
-    # print(type(frame[0,0]))
+    # get all odom points
+    res = cur.execute(f"SELECT x, y FROM flight_{'night_out'}")
+    odom = cur.fetchall()
+    odom = np.array(odom)
+    # get related points
+        # SELECT t1.name
+        # FROM table1 t1
+        # LEFT JOIN table2 t2 ON t2.name = t1.name
+        # WHERE t2.name IS NULL
+
+    res = cur.execute(f"select flight_night_out.x, flight_night_out.y from flight_night_out inner join relations_get_lucky on flight_night_out.r_save_loc == relations_get_lucky.img_loc")
+    seen = cur.fetchall()
+    seen = np.array(seen)
+    # print(seen)
+
+    # plot everything
+    # print(odom[:,0], odom[:,1])
+    plot.scatter(odom[:,0], odom[:,1], color='blue')
+    plot.scatter(clicks[:,0], clicks[:,1], color='red')
+    plot.scatter(seen[:,0], seen[:,1], color='orange')
 
 
-    # print(f'val.shape: {val.shape}') #1920x1080 -> 1036x1888
+    return 
+
+
+def findWithHSV(frame):
+
+    max_value = 255
+    max_value_H = 360//2
+    low_H = 117
+    low_S = 90
+    low_V = 79
+    high_H = 180
+    high_S = 255
+    high_V = 193
+    # convert to HSV
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # Threshold the HSV image to get only blue colors
+    mask1 = cv2.inRange(hsv, (low_H, low_S, low_V), (high_H, high_S, high_V))
+    # mask2 = cv2.inRange(hsv, (low_H, low_S, low_V), (high_H, high_S, high_V))
+    # Bitwise-AND mask and original image
+    # res = cv2.bitwise_and(frame,frame, mask= mask)
+
+    # attrition of signal
     for _ in range(BLUR_ITER):
-        frame = cv2.GaussianBlur(frame, BLUR_KERNEL, BLUR_GAUSSVAR)
-        # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
-        # _, val = cv2.Canny(val, 30, 200)  # an alternative to binary thresholding
+        mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
 
-    blur_data = frame.copy().flatten()
-    counts, bins = np.histogram(blur_data, 255)
-    mids = 0.5*(bins[1:] + bins[:-1])
-    probs = counts / np.sum(counts)
+    mask1 = (mask1//5)**2
 
-    mean = np.sum(probs * mids)  
-    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
-    # print(blur_data)
-    # print(mean, sd)
-
-    frame[frame < mean + (3*sd)] = 0
-
-    counts, bins = np.histogram(frame.copy().flatten(), 255)
-    mids = 0.5*(bins[1:] + bins[:-1])
-    probs = counts / np.sum(counts)
-
-    mean = np.sum(probs * mids)  
-    sd = np.sqrt(np.sum(probs * (mids - mean)**2))
-    # print(blur_data)
-    # print(mean, sd)
-
-    frame[frame < mean + (1*sd)] = 0
-
-    # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, BLUR_KERNEL)
-    cv2.morphologyEx(frame, cv2.MORPH_GRADIENT, kernel, iterations=BLUR_ITER)
-    
-    first_blur = frame.copy()
-
-    frame = (frame//2)**1.8
     for _ in range(BLUR_ITER):
-        frame = cv2.GaussianBlur(frame, BLUR_KERNEL, BLUR_GAUSSVAR)
-        # _, frame = cv2.threshold(frame, THRESHOLD2, HIGH, cv2.THRESH_BINARY)
-        
-    # print(type(frame[0,0]))
+        mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
 
-    frame *= 255.0/frame.max()
-    frame = frame.astype('uint8')
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    mask1 = cv2.filter2D(mask1, -1, kernel)
+
+    for _ in range(BLUR_ITER*2):
+        mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
+
+    kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+    mask1 = cv2.filter2D(mask1, -1, kernel)
+
+    mask1 = (mask1//3)**2
+
+    for _ in range(BLUR_ITER*2):
+        mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
+
+    for _ in range(2):
+        mask1 = (mask1//5)**2
+        ret, mask1 = cv2.threshold(mask1,175,255,cv2.THRESH_BINARY)
+
+        for _ in range(BLUR_ITER):
+            mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
+    
+    ret, mask1 = cv2.threshold(mask1,20,255,cv2.THRESH_BINARY)
+
+    for _ in range(BLUR_ITER//3):
+        mask1 = cv2.GaussianBlur(mask1, BLUR_KERNEL, BLUR_GAUSSVAR)
+
+    return mask1
 
 
-    # fit a double gaussian and the higher value smaller hump is the thing you are looking for
-     
-    # val = cv2.cvtColor(val, cv2.COLOR_RGB2GRAY)
+def theGreatFilterEvent(frame):
+    # get the red color channel
+    mask = findWithHSV(frame)
+    
+    return mask, frame
+
+
+def findSquare(frame):
+    
     c, h = cv2.findContours(frame, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
     # print(c)
     # a = cv2.contourArea(c)
     c.sort(key = len)
     # val3 = val2.copy()
+    centroids = []
+    # return frame, centroids
+
     for cont in c:
         approx = cv2.approxPolyDP(cont, 4, True)
-        if len(approx) == 8:
-            # print('yoohoo!', approx)    
-            frame = cv2.drawContours(image=frame, contours=[approx], contourIdx=-1, color=(255, 255, 0), thickness=10)
-            # print(approx[0])
-            frame = cv2.putText(frame, 'this one!', tuple(approx[0,0]), font, fontScale, (255, 255, 0), thickness, cv2.LINE_AA)
-    # approx = cv2.approxPolyDP(c[1], 5, True)    
-    # frame = cv2.drawContours(image=frame, contours=[approx], contourIdx=-1, color=(255, 255, 0), thickness=10)
-    # frame = cv2.putText(frame, 'this is the one', tuple(approx[0,0]), font, fontScale, (255, 255, 0), thickness, cv2.LINE_AA)
+        # if len(approx) < 18 and len(approx) > 14:
+        # print('yoohoo!', approx)    
+        frame = cv2.drawContours(image=frame, contours=[approx], contourIdx=-1, color=(255, 255, 0), thickness=10)
+        # print(approx[0])
+        frame = cv2.putText(frame, str(len(approx)), tuple(approx[0,0]), font, fontScale, (255, 255, 0), thickness, cv2.LINE_AA)
+        center = np.average(cont, axis=0)[0]
+        # print(int(center[0]), int(center[1]))
+        center = (int(center[0]), int(center[1]))
+        centroids.append(center)
+        frame = cv2.circle(frame, center, radius=15, color=(0, 255, 255), thickness=3)
+    return frame, centroids
 
 
-    # frame = cv2.drawContours(image=frame, contours=c, contourIdx=-1, hierarchy=h, color=(255, 0, 0), thickness=10)
+# input      list of stacks
+# return     the stack name with a computed blob center 
+# # this pulls the target from individual frames with blob detection
+def getFrameTarget(frame):  # frame is cc_parsed
+    # filter the image for targets
+    filtered, frame = theGreatFilterEvent(frame)
+    # extract centroids for the targets
+    highlighted, c = findSquare(filtered)
+    print(c)
 
-    return frame, peaky, first_blur, blur_data
-
-
-def findSquare(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    blur = cv2.medianBlur(gray, 5)
-    sharpen_kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
-    sharpen = cv2.filter2D(blur, -1, sharpen_kernel)
-
-    # Threshold and morph close
-    thresh = cv2.threshold(sharpen, 160, 255, cv2.THRESH_BINARY_INV)[1]
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3,3))
-    close = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-    # Find contours and filter using threshold area
-    cnts, _ = cv2.findContours(close, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    # cnts = cnts[0] if len(cnts) == 2 else cnts[1]
-    # print(cnts)
-
-    min_area = 100
-    max_area = 2000
-    image_number = 0
-    areas = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        print(area)
-        areas.append(area)
-        if area > min_area and area < max_area:
-            x,y,w,h = cv2.boundingRect(c)
-            ROI = frame[y:y+h, x:x+w]
-            frame = cv2.rectangle(frame, (x, y), (x + w, y + h), (255,255,255), 15)
-            print('square?')
-            image_number += 1           
-
-    return sharpen, close, thresh, frame, areas
+    return highlighted, filtered, frame
 
 
 def prettyImage(cc):
@@ -208,11 +216,7 @@ def prettyImage(cc):
             rgb = cv2.undistort(rgb, rgb_K, rgb_dist)
             rgb = cv2.flip(rgb, 0)
 
-            frame, val, blur, data = getFrameTarget(rgb)
-            # found_squares += a
-            # f = rgb & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
-            # f, tl, br = findSquare(rgb)
-            # plt.imshow(frame)
+            frame, val, blur = getFrameTarget(rgb)
             fig, ax = plt.subplots(2, 2, figsize=(12, 7))
             # fig
             ax[0][0].imshow(frame)
@@ -220,13 +224,16 @@ def prettyImage(cc):
             # f = cv2.rectangle(f,tl, br,(255,255,255),7)
             ax[0][1].imshow(val)
             ax[1][0].imshow(blur)
+
+            showTrajectory(ax[1][1])
             
-            ax[1][1].hist(blur[blur > 0].flatten(), 255)
+            # ax[1][1].hist(blur[blur > 0].flatten(), 255)
             # ax[5].imshow(kp)
 
             plt.savefig(f'IMG_FOR_TEST_{time.time()}.png')  # may need png instead of eps
             plt.close()
         idx += 1
+    
 
     # found_squares = [f for f in found_squares if f > 0 and f < 100000]
     # plt.hist(found_squares)
@@ -236,11 +243,31 @@ def prettyImage(cc):
     # return centers
 
 
-# this joins the blob data with predicted data a
-def joinAndCompute(rel, blob, maxval=HIGH):
-    
-    pass
+def computeDisparity(cc):
+    db_c = sqlite3.connect('drone_disease.db')
+    cur = db_c.cursor()
+    res = cur.execute(f"SELECT img_loc FROM relations_{'get_lucky'}")
+    found_squares = []
+    for row in res.fetchall():
+        # img_loc, pred_pixel_x, pred_pixel_y
+        print(row)
+        # rgb = cv2.imread(row[7]) # for using flight data raw
+        rgb = cv2.imread(row[0])
+        rgb = cv2.undistort(rgb, rgb_K, rgb_dist)
+        rgb = cv2.flip(rgb, 0)
 
+        filtered, frame = theGreatFilterEvent(rgb)
+        # extract centroids for the targets
+        highlighted, c = findSquare(filtered)
+        thing = (c[:,0], c[:,1], row[0])
+        found_squares.append(thing)
+
+        # compute deltas from c to pred pixels
+            # zip ppx and ppy
+
+    cur.executemany(f"INSERT blob_center_x, blob_center_y INTO relations_get_lucky VALUES (?, ?) WHERE img_loc == ?", found_squares)
+
+        
 
 def setup():
     root = "calibrate"
@@ -264,7 +291,8 @@ def main():
     
     # find truth 
     # truth = readImages(cam_com)
-    prettyImage(cam_com)
+    # prettyImage(cam_com)
+    computeDisparity
 
     # compare predictions to blobs
     # joinAndCompute(relations, truth)
