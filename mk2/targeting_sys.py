@@ -8,6 +8,9 @@ import matplotlib.pyplot as plt
 import time
 import pickle
 
+
+FIELD_OF_VIEW = 20
+
 HIGH = 1
 THRESHOLD1 = 0.25
 THRESHOLD1 *= 255
@@ -18,15 +21,14 @@ THRESHOLD2 = int(THRESHOLD2)
 BLUR_ITER = 8
 BLUR_KERNEL = (15,15)
 BLUR_GAUSSVAR = 10  # Very important hyperparameter
-
-template = cv2.imread('mk2/Screenshot from 2023-03-02 22-26-11.png')
-GLOWUP = 275
 # font
 font = cv2.FONT_HERSHEY_SIMPLEX
 # fontScale
 fontScale = 3
 # Line thickness of 2 px
 thickness = 5
+
+cooper = DBConnector()
 
 
 # input      bag and csv 
@@ -61,9 +63,11 @@ def preprocess(datadir):
 
 # this relates the click data to image space
 # it reurns a dataframe 
-def findRelations(cam_combo):
+def findRelations(cam_combo, re_run=False):
+    if re_run == True:
+        cooper.db_c.execute("DROP TABLE relations_get_lucky")
     D = Relater(cam_combo.flight_name)
-    return D.clicks_to_image(25)
+    D.clicks_to_image(FIELD_OF_VIEW)
 
 
 def showTrajectory(plot):
@@ -185,7 +189,7 @@ def findSquare(frame):
         center = (int(center[0]), int(center[1]))
         centroids.append(center)
         frame = cv2.circle(frame, center, radius=15, color=(0, 255, 255), thickness=3)
-    return frame, centroids
+    return frame, np.array(centroids)
 
 
 # input      list of stacks
@@ -204,7 +208,7 @@ def getFrameTarget(frame):  # frame is cc_parsed
 def prettyImage(cc):
     db_c = sqlite3.connect('drone_disease.db')
     cur = db_c.cursor()
-    res = cur.execute(f"SELECT img_loc FROM relations_{'get_lucky'}")
+    res = cur.execute(f"SELECT img_loc FROM relations_{'get_lucky'} LIMIT 10")
     idx = 0
     found_squares = []
     for row in res.fetchall():
@@ -243,12 +247,15 @@ def prettyImage(cc):
     # return centers
 
 
-def computeDisparity(cc):
+def computeCentroids(cc):
     db_c = sqlite3.connect('drone_disease.db')
     cur = db_c.cursor()
     res = cur.execute(f"SELECT img_loc FROM relations_{'get_lucky'}")
     found_squares = []
+    idx = 0
     for row in res.fetchall():
+        if idx == 10:
+            break
         # img_loc, pred_pixel_x, pred_pixel_y
         print(row)
         # rgb = cv2.imread(row[7]) # for using flight data raw
@@ -259,15 +266,39 @@ def computeDisparity(cc):
         filtered, frame = theGreatFilterEvent(rgb)
         # extract centroids for the targets
         highlighted, c = findSquare(filtered)
+        if c.size == 0:
+            c = np.array([[-1, -1]])
+        print(c)
+        # thing = (c[:,0], c[:,1], row[0])
         thing = (c[:,0], c[:,1], row[0])
         found_squares.append(thing)
+        idx += 1
 
         # compute deltas from c to pred pixels
             # zip ppx and ppy
 
-    cur.executemany(f"INSERT blob_center_x, blob_center_y INTO relations_get_lucky VALUES (?, ?) WHERE img_loc == ?", found_squares)
-
+    cur.executemany(f"UPDATE relations_get_lucky SET blob_center_x = ?, blob_center_y = ? WHERE img_loc = ?;", found_squares)
+    db_c.commit()
         
+
+def computeRangeAndBearings():
+    # get all predicted points and all detected points 
+    p_and_d = cooper.getFrom('pred_pixel_x, pred_pixel_y, blob_center_x, blob_center_x', 'relations_get_lucky', max=5)
+    for e in p_and_d:
+        # get range between points
+        # print(type(e[0]))
+        pred_xy = np.column_stack((e[0], e[1]))
+        # print('pred', pred_xy)
+        foun_xy = np.column_stack((e[2], e[3]))
+        # print('found', foun_xy)
+        for p in pred_xy:
+            diff = foun_xy - p
+            # print(diff)
+            euclid = np.abs(np.linalg.norm(diff, 2, axis=0))
+            bearin = (np.arctan2(diff[:,0], diff[:,1]) * 180 / np.pi)
+            print('range', euclid)
+            print('bearing', bearin)
+
 
 def setup():
     root = "calibrate"
@@ -281,20 +312,25 @@ def setup():
 
 def main():
 
+    # cooper.setupArrays()
     # setup
     dir_files = setup()
 
     cam_com = preprocess(dir_files)
 
     # record projected points
-    findRelations(cam_com)
-    
+    findRelations(cam_com, True)
+    cooper.diagnostic('relations_get_lucky', max=10)
     # find truth 
     # truth = readImages(cam_com)
-    # prettyImage(cam_com)
-    computeDisparity
+    prettyImage(cam_com)
+    computeCentroids(cam_com)
 
+    print('\n\n===============================================================================================================\n\n')
+
+    cooper.diagnostic('relations_get_lucky', max=10)
     # compare predictions to blobs
+    computeRangeAndBearings()
     # joinAndCompute(relations, truth)
 
 

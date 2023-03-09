@@ -36,7 +36,12 @@ class Dir:
 
 class DBConnector:
     def __init__(self) -> None:
-        self.db_c = sqlite3.connect('drone_disease.db')
+        # Converts np.array to TEXT when inserting
+        sqlite3.register_adapter(np.ndarray, self.adapt_array)
+        # Converts TEXT to np.array when selecting
+        sqlite3.register_converter("array", self.convert_array)
+        # con = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
+        self.db_c = sqlite3.connect('drone_disease.db', detect_types=sqlite3.PARSE_DECLTYPES)
 
     def adapt_array(self, arr):
         """
@@ -52,18 +57,33 @@ class DBConnector:
         out.seek(0)
         return np.load(out)
 
-    def demo(self):
+    def setupArrays(self):
         # Converts np.array to TEXT when inserting
         sqlite3.register_adapter(np.ndarray, self.adapt_array)
-
         # Converts TEXT to np.array when selecting
         sqlite3.register_converter("array", self.convert_array)
-
-        x = np.arange(12).reshape(2,6)
-
         con = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
-        cur = con.cursor()
-        cur.execute("create table test (arr array)")
+
+    def diagnostic(self, table, max=0):
+        cur = self.db_c.cursor()
+        limit = ';'
+        if max != 0:
+            limit = f" LIMIT {max};"
+        res = cur.execute(f"SELECT * FROM {table}" + limit)
+        print(res.fetchall())
+
+    def getFrom(self, what, where, max=0):
+        cur = self.db_c.cursor()
+        limit = ';'
+        if max != 0:
+            limit = f" LIMIT {max};"
+        res = cur.execute(f"SELECT {what} FROM {where}" + limit)
+        return res.fetchall()
+
+        
+    
+
+    
     
 
 
@@ -83,8 +103,8 @@ class Banners:
         cur = self.db_c.cursor()
         res = cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='flight_{flight_name}';")
         if len(res.fetchall()) == 0:
-            cur.execute(f"CREATE TABLE flight_{flight_name}(x, y, z, q, u, a, t, r_save_loc, n_save_loc, f_save_loc)")
-            cur.execute(f"CREATE TABLE clicks_{flight_name}(x, y, health)")
+            cur.execute(f"CREATE TABLE flight_{flight_name}((x REAL, y REAL, z REAL, q REAL, u REAL, a REAL, t REAL, r_save_loc TEXT, n_save_loc TEXT, f_save_loc TEXT))")
+            cur.execute(f"CREATE TABLE clicks_{flight_name}(x REAL, y REAL, health INTEGER)")
             self.db_c.commit()
             self.is_new = True
         self.rg_fov_check = []
@@ -145,7 +165,7 @@ class Relater:
         cur = self.db_c.cursor()
         res = cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='relations_{flight_name}';")
         if len(res.fetchall()) == 0:
-            cur.execute(f"CREATE TABLE relations_{flight_name}(img_loc, pred_pixel_x, pred_pixel_y, blob_center_x, blob_center_y)")
+            cur.execute(f"CREATE TABLE relations_{flight_name} (img_loc TEXT, pred_pixel_x array, pred_pixel_y array, blob_center_x array, blob_center_y array)")
             self.db_c.commit()
 
     def makePoseMatrix(self, trans, rot):
@@ -170,33 +190,36 @@ class Relater:
 
     def getClicksInFOV(self, pos, fov):
         cone = self.visCone(pos, fov)
-        # form the querry 
         q = f"SELECT x, y FROM clicks_{self.ban_id} WHERE (x BETWEEN {cone[0] + pos[0,3]} and {cone[1] + pos[0,3]}) and (y BETWEEN {cone[2] + pos[1,3]} and {cone[3] + pos[1,3]});"
-        # print(q)
-        # cur = self.db_c.cursor()
-        # res = cur.execute(q)
-        # for r in res:
-        #     print('point found', r)
         return q
 
     def clicks_to_image(self, FOV_angle):
         # iterate over the images and poses
         cur = self.db_c.cursor()
         res = cur.execute(f"SELECT x, y, z, q, u, a, t, r_save_loc FROM flight_{self.ban_id};")
+        predictions = []
         for r in res.fetchall():
             # print(r)
             pose = self.makePoseMatrix([float(r[0]), float(r[1]), float(r[2])], [float(r[3]), float(r[4]), float(r[5]), float(r[6])])
-            query = self.getClicksInFOV(pose, FOV_angle)
+            query = self.getClicksInFOV(pose, FOV_angle) # returns the location of the clicks that can be seen
             pts = cur.execute(query)
-            for point in pts:
-                point = self.convert_to_local(pose, point)
-                # print(pts)
-                pxs = self.fProject(point, rgb_K).tolist()
-                # print(pxs)
-                q = f"INSERT INTO relations_{self.flight_name} (img_loc, pred_pixel_x, pred_pixel_y) VALUES ('{r[7]}', {pxs[0][0]}, {pxs[1][0]});"
+            pts = pts.fetchall()
+            print("points", pts)
+            if len(pts) > 0:
+                img_pts_x = []
+                img_pts_y = []
+                for point in pts:
+                    point = self.convert_to_local(pose, point)
+                    # print(pts)
+                    pxs = self.fProject(point, rgb_K)
+                    print(pxs[1,:])
+                    img_pts_x.append(pxs[0,:][0])
+                    img_pts_y.append(pxs[1,:][0])
+                predictions.append((r[7], np.array(img_pts_x), np.array(img_pts_y)))
                 # print(q)
-                cur.execute(q)
-                self.db_c.commit()
+        # print(predictions)
+        cur.executemany("INSERT INTO relations_get_lucky (img_loc, pred_pixel_x, pred_pixel_y) VALUES (?, ?, ?)", predictions)
+        self.db_c.commit()
           
 
     def fProject(self, points, K):
