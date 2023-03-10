@@ -10,6 +10,7 @@ import pickle
 
 
 FIELD_OF_VIEW = 20
+TESTING_NUM = 5
 
 HIGH = 1
 THRESHOLD1 = 0.25
@@ -74,12 +75,12 @@ def showTrajectory(plot):
     db_c = sqlite3.connect('drone_disease.db')
     cur = db_c.cursor()
     # get position of clicks
-    res = cur.execute(f"SELECT x, y FROM clicks_{'night_out'}")
+    res = cur.execute(f"SELECT x, y FROM clicks_{'get_lucky'}")
     clicks = cur.fetchall()
     clicks = np.array(clicks)
     
     # get all odom points
-    res = cur.execute(f"SELECT x, y FROM flight_{'night_out'}")
+    res = cur.execute(f"SELECT x, y FROM flight_{'get_lucky'}")
     odom = cur.fetchall()
     odom = np.array(odom)
     # get related points
@@ -88,18 +89,17 @@ def showTrajectory(plot):
         # LEFT JOIN table2 t2 ON t2.name = t1.name
         # WHERE t2.name IS NULL
 
-    res = cur.execute(f"select flight_night_out.x, flight_night_out.y from flight_night_out inner join relations_get_lucky on flight_night_out.r_save_loc == relations_get_lucky.img_loc")
+    res = cur.execute(f"select flight_get_lucky.x, flight_get_lucky.y from flight_get_lucky inner join relations_get_lucky on flight_get_lucky.r_save_loc == relations_get_lucky.img_loc")
     seen = cur.fetchall()
     seen = np.array(seen)
     # print(seen)
 
     # plot everything
     # print(odom[:,0], odom[:,1])
-    plot.scatter(odom[:,0], odom[:,1], color='blue')
-    plot.scatter(clicks[:,0], clicks[:,1], color='red')
-    plot.scatter(seen[:,0], seen[:,1], color='orange')
-
-
+    plot.scatter(odom[:,0], odom[:,1], color='blue', lebel="raw position")
+    plot.scatter(clicks[:,0], clicks[:,1], color='red', label="clicks")
+    plot.scatter(seen[:,0], seen[:,1], color='orange', label="position see click")
+    plot.legend()
     return 
 
 
@@ -283,7 +283,9 @@ def computeCentroids(cc):
 
 def computeRangeAndBearings():
     # get all predicted points and all detected points 
-    p_and_d = cooper.getFrom('pred_pixel_x, pred_pixel_y, blob_center_x, blob_center_x', 'relations_get_lucky', max=5)
+    p_and_d = cooper.getFrom('pred_pixel_x, pred_pixel_y, blob_center_x, blob_center_x', 'relations_get_lucky', max=TESTING_NUM)
+
+    errors = []
     for e in p_and_d:
         # get range between points
         # print(type(e[0]))
@@ -291,13 +293,24 @@ def computeRangeAndBearings():
         # print('pred', pred_xy)
         foun_xy = np.column_stack((e[2], e[3]))
         # print('found', foun_xy)
+        optimal = []
         for p in pred_xy:
             diff = foun_xy - p
             # print(diff)
             euclid = np.abs(np.linalg.norm(diff, 2, axis=0))
             bearin = (np.arctan2(diff[:,0], diff[:,1]) * 180 / np.pi)
-            print('range', euclid)
-            print('bearing', bearin)
+            min_idx = np.argmin(euclid)
+            best = [euclid[min_idx], bearin[min_idx]]
+            optimal.append(best)
+            print('best measurments', best)
+            # print('range', euclid)
+            # print('bearing', bearin)
+        errors.append(optimal)
+
+
+
+    print('all of the errors', errors)
+    print('average error', np.average(np.array(errors)[:,:,0]))
 
 
 def setup():
@@ -319,8 +332,8 @@ def main():
     cam_com = preprocess(dir_files)
 
     # record projected points
-    findRelations(cam_com, True)
-    cooper.diagnostic('relations_get_lucky', max=10)
+    findRelations(cam_com, False)
+    cooper.diagnostic('relations_get_lucky', max=TESTING_NUM)
     # find truth 
     # truth = readImages(cam_com)
     prettyImage(cam_com)
@@ -328,7 +341,7 @@ def main():
 
     print('\n\n===============================================================================================================\n\n')
 
-    cooper.diagnostic('relations_get_lucky', max=10)
+    cooper.diagnostic('relations_get_lucky', max=TESTING_NUM)
     # compare predictions to blobs
     computeRangeAndBearings()
     # joinAndCompute(relations, truth)
