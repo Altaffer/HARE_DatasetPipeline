@@ -9,8 +9,8 @@ import time
 import pickle
 
 
-FIELD_OF_VIEW = 20
-TESTING_NUM = 5
+FIELD_OF_VIEW = 25
+TESTING_NUM = 15
 
 HIGH = 1
 THRESHOLD1 = 0.25
@@ -96,7 +96,7 @@ def showTrajectory(plot):
 
     # plot everything
     # print(odom[:,0], odom[:,1])
-    plot.scatter(odom[:,0], odom[:,1], color='blue', lebel="raw position")
+    plot.scatter(odom[:,0], odom[:,1], color='blue', label="raw position")
     plot.scatter(clicks[:,0], clicks[:,1], color='red', label="clicks")
     plot.scatter(seen[:,0], seen[:,1], color='orange', label="position see click")
     plot.legend()

@@ -38,7 +38,10 @@ rgb_K = np.array([[3328.72744368, 0.0, 985.2442405],
                   [0, 0, 1]])
 rgb_dist = np.array([-0.33986049, -0.49477998,  0.00326809, -0.00230553])
 
-
+# TODO: make this better
+rot_offset = np.concatenate((R.from_euler('xyz', [-0.00005, 0.002, -0.000005], degrees=True).as_matrix(), np.zeros((1,3))), axis=0)
+tra_offset = np.expand_dims(np.concatenate((np.array([0, 0, 0]), np.array([1])),axis=0).T, axis=1)
+rgb_offset = np.concatenate((rot_offset, tra_offset), axis=1)
 
 @dataclass
 class Dir:
@@ -71,13 +74,20 @@ class DBConnector:
         out = io.BytesIO(text)
         out.seek(0)
         return np.load(out)
+    
+    def checkForTable(self, table_name):
+        cur = self.db_c.cursor()
+        res = cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';")
+        if len(res.fetchall()) == 0:
+            return False
+        return True
 
-    def setupArrays(self):
-        # Converts np.array to TEXT when inserting
-        sqlite3.register_adapter(np.ndarray, self.adapt_array)
-        # Converts TEXT to np.array when selecting
-        sqlite3.register_converter("array", self.convert_array)
-        con = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
+    # def setupArrays(self):
+    #     # Converts np.array to TEXT when inserting
+    #     sqlite3.register_adapter(np.ndarray, self.adapt_array)
+    #     # Converts TEXT to np.array when selecting
+    #     sqlite3.register_converter("array", self.convert_array)
+    #     con = sqlite3.connect(":memory:", detect_types=sqlite3.PARSE_DECLTYPES)
 
     def diagnostic(self, table, max=0):
         cur = self.db_c.cursor()
@@ -96,6 +106,22 @@ class DBConnector:
             cond = ' '
         res = cur.execute(f"SELECT {what} FROM {where}" + limit + " " + cond)
         return res.fetchall()
+    
+    def dfToTable(self, data, where, over_write=True):
+        proc_d = self.checkForTable(f"processed_data_{where}")
+        if proc_d == True and over_write == True:
+            cur = self.db_c.cursor()
+            cur.execute(f"DROP TABLE processed_data_{where}")
+            data.to_sql(name=f"processed_data_{where}", con=self.db_c)
+        if proc_d == False:
+            data.to_sql(name=f"processed_data_{where}", con=self.db_c)
+
+
+    def tableToDF(self, where):
+        df = pd.read_sql_query(f"SELECT * FROM processed_data_{where}", self.db_c)
+        return df
+
+
 
 
 
@@ -121,12 +147,92 @@ class Banners:
         self.no_fov_check = []
         self.fl_fov_check = []
 
-    def convertAndSave(self, data, sensor, time):
-        vcimg = bridge.imgmsg_to_cv2(data, desired_encoding='passthrough')
+
+        '''
+        BITMAP3 YUV_to_RGB(int y,int u,int v){
+            int r,g,b;
+            BITMAP3 bm = {0,0,0};
+            
+            // u and v are +-0.5
+            u -= 128;
+            v -= 128;
+
+            /* Conversion
+            r = y + 1.370705 * v;
+            g = y - 0.698001 * v - 0.337633 * u;
+            b = y + 1.732446 * u;
+            */
+            r = y + 1.402 * v;  
+            g = y - 0.34414 * u - 0.71414 * v;  
+            b = y + 1.772 * u; 
+
+            // Clamp to 0..1
+            if (r < 0) r = 0;
+            if (g < 0) g = 0;
+            if (b < 0) b = 0;
+            if (r > 255) r = 255;
+            if (g > 255) g = 255;
+            if (b > 255) b = 255;
+
+            bm.r = r;
+            bm.g = g;
+            bm.b = b;
+
+            return(bm);
+        }
+        '''
+
+
+    
+    def convertYUVtoRGB8Pixel(self, y, u, v):
+        tmp_r = y + int(1.402*v) 
+        tmp_g = y - int(0.714*v + 0.344*u)
+        tmp_b = y + int(1.772*u)
+        r = max(0, min(tmp_r, 255))
+        g = max(0, min(tmp_g, 255))
+        b = max(0, min(tmp_b, 255))
+        return r, g, b
+
+
+    def convertYUV420SPtoRGB8Image(self, yuv, width, height, uv_offset):
+        pixel_size = width * height
+        offset = pixel_size + uv_offset
+        #1920*1080 | 
+        # yuv = [y | uv]
+        print("length of yuv", len(yuv))
+
+        rgb = np.empty([len(yuv)])
+
+        for t in range(0, pixel_size, 2):
+            uv = t
+            y = t
+            v = yuv[offset + uv] & 0xff
+            v -= 128
+            u = yuv[offset + uv+1] & 0xff
+            u -= 128
+
+            for i in [0, 1, width, width+1]:
+                # location of rgb pixel
+                pix_rgb = 3 * (y + i)
+                luma_val = yuv[y + i] & 0xff
+                # print("pix rgb",pix_rgb)
+                rgb[pix_rgb], rgb[pix_rgb+1], rgb[pix_rgb+2] = self.convertYUVtoRGB8Pixel(luma_val, u, v)
+
+            if y!=0 and (y+2) % width == 0:
+                y += width
+                # print('y', y)
+
+        return rgb
+
+
+    def convertAndSave(self, msg, sensor, time):
+        vcimg = bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        # vcimg = self.convertYUV420SPtoRGB8Image(msg.data, msg.width, msg.height, 0)
         location = os.path.join(self.dir.path, 'stacks/')
         location = os.path.join(location, sensor)
         location = os.path.join(location, "img_"+str(time.secs) + '.' + str(time.nsecs)+".png")
         cv2.imwrite(location, vcimg)
+        # cv2.imshow('frame', vcimg)
         return location
 
 
@@ -203,6 +309,7 @@ class Relater:
         return q
 
     def clicks_to_image(self, FOV_angle):
+
         # iterate over the images and poses
         cur = self.db_c.cursor()
         res = cur.execute(f"SELECT x, y, z, q, u, a, t, r_save_loc FROM flight_{self.ban_id};")
@@ -218,6 +325,7 @@ class Relater:
                 img_pts_x = []
                 img_pts_y = []
                 for point in pts:
+                    pose = pose @ rgb_offset
                     point = self.convert_to_local(pose, point)
                     # print(pts)
                     pxs = self.fProject(point, rgb_K)
@@ -262,6 +370,7 @@ class Analyzer:
 
     def preprocess(self, datadir):
         TOPICS = ['/current_pose', '/cam0/nv12_decode_result', '/cam1/nv12_decode_result', '/therm/image_raw_throttle']
+        # TOPICS = ['/current_pose', '/cam0/camera/image_raw', '/cam1/camera/image_raw', '/therm/image_raw_throttle']
         B = Banners(flight_name=self.flight_name)
         B.dir = datadir
         if B.is_new:
@@ -271,13 +380,13 @@ class Analyzer:
             bag = rosbag.Bag(datadir.bag)
             for topic, msg, t in bag.read_messages(TOPICS):
                 # stack 3 images together
-                if topic == '/therm/image_raw_throttle':
+                if topic == TOPICS[3]:
                     B.flir = msg
-                if topic == '/cam0/nv12_decode_result':
+                if topic == TOPICS[1]:
                     B.rgb = msg
-                if topic == '/cam1/nv12_decode_result':
+                if topic == TOPICS[2]:
                     B.noir = msg
-                if topic == "/current_pose":
+                if topic == TOPICS[0]:
                     B.pose = msg
                     # print('stacking')
                     B.stack(t)
@@ -290,8 +399,15 @@ class Analyzer:
     def findRelations(self, cam_combo, re_run=False):
         if re_run == True:
             self.cooper.db_c.execute(f"DROP TABLE relations_{self.flight_name}")
-        D = Relater(self.flight_name)
-        D.clicks_to_image(self.field_of_view)
+            D = Relater(self.flight_name)
+            D.clicks_to_image(self.field_of_view)
+        else:
+            if self.cooper.checkForTable(f"relations_{self.flight_name}"):
+                return
+            else:
+                D = Relater(self.flight_name)
+                D.clicks_to_image(self.field_of_view)
+
 
 
     def showTrajectory(self, plot):
@@ -452,10 +568,7 @@ class Analyzer:
         cur = db_c.cursor()
         res = cur.execute(f"SELECT img_loc FROM relations_{self.flight_name}")
         found_squares = []
-        idx = 0
         for row in res.fetchall():
-            if idx == 10:
-                break
             # img_loc, pred_pixel_x, pred_pixel_y
             # print(row)
             # rgb = cv2.imread(row[7]) # for using flight data raw
@@ -472,7 +585,6 @@ class Analyzer:
             # thing = (c[:,0], c[:,1], row[0])
             thing = (c[:,0], c[:,1], row[0])
             found_squares.append(thing)
-            idx += 1
 
             # compute deltas from c to pred pixels
                 # zip ppx and ppy
@@ -485,6 +597,7 @@ class Analyzer:
         # get all predicted points and all detected points 
         p_and_d = self.cooper.getFrom('pred_pixel_x, pred_pixel_y, blob_center_x, blob_center_x', f'relations_{self.flight_name}')
 
+        errors_df = pd.DataFrame(columns=['euclidian', 'L1', 'bearing'])
         errors = []
         for e in p_and_d:
             # get range between points
@@ -499,23 +612,55 @@ class Analyzer:
                     # print(p, foun_xy)
                     diff = foun_xy - p
                     # print(diff)
-                    euclid = np.abs(np.linalg.norm(diff, 2, axis=0))
-                    bearin = (np.arctan2(diff[:,0], diff[:,1]) * 180 / np.pi)
+                    euclid = np.abs(np.linalg.norm(diff, 2, axis=1))
+                    taxica = np.abs(np.linalg.norm(diff, 1, axis=1))
+
+                    # print(diff)
+                    bearin = np.arctan2(diff[:,0], diff[:,1]) * 180 / np.pi
                     min_idx = np.argmin(euclid)
+                    # print(euclid.shape, bearin.shape, min_idx)
                     best = [euclid[min_idx], bearin[min_idx]]
                     optimal.append(best)
                     # print('best measurments', best)
                     # print('range', euclid)
                     # print('bearing', bearin)
+                    row = [euclid[min_idx], bearin[min_idx], taxica[min_idx]]
+                    errors_df.loc[len(errors_df.index)] = row
                 errors.append(optimal)
-        # print('all of the errors', errors)
+
+        self.cooper.dfToTable(errors_df, self.flight_name)
+
         print('average distance error', np.average(np.array(errors)[:,:,0]))
         # TODO: actually generate a report for the data
+        self.genReport(errors_df)
 
 
-    # TODO: this
-    def genReport(self, data):        
-        pass
+    # TODO: this builds a report of the distance data
+    def genReport(self, data):
+        # find average and std
+        # print("mu", np.average(data), "\nsigma", np.std(data))
+
+        # find avg and std of top 25%
+
+        # avg and std of top 50%
+
+        fig, ax = plt.subplots(2, 2, figsize=(12, 7))
+        # fig.set_xticklabel('pixels')
+        # fig.set_yticklabel('frequency')
+
+        # fig
+        ax[0][0].hist(data['euclidian'].to_numpy(), bins=25)
+        ax[0][0].title.set_text('Histogram of euclidian distance')
+        ax[0][0].set(xlabel='pixels of error', ylabel='frequency')
+        # f = f & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
+        # f = cv2.rectangle(f,tl, br,(255,255,255),7)
+        ax[0][1].hist(data['L1'].to_numpy(), bins=25)
+        ax[0][1].title.set_text('Histogram of L1 error')
+        ax[0][1].set(xlabel='pixels of error', ylabel='frequency')
+
+        plt.show()
+
+        print("average error")
 
 
     def doTheRoar(self):
@@ -533,3 +678,8 @@ class Analyzer:
         self.prettyImage(cam_com)
 
 
+    def regreaphData(self, extra_processing=None):
+        data = self.cooper.tableToDF(self.flight_name)
+        if extra_processing != None:
+            extra_processing(data)
+        self.genReport(data)
