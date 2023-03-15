@@ -409,7 +409,6 @@ class Analyzer:
                 D.clicks_to_image(self.field_of_view)
 
 
-
     def showTrajectory(self, plot):
         db_c = sqlite3.connect('drone_disease.db')
         cur = db_c.cursor()
@@ -453,16 +452,24 @@ class Analyzer:
             rgb = cv2.undistort(rgb, rgb_K, rgb_dist)
             rgb = cv2.flip(rgb, 0)
 
-            frame, val, blur = self.getFrameTarget(rgb)
+            proc, filtered, og = self.getFrameTarget(rgb)
             fig, ax = plt.subplots(2, 2, figsize=(12, 7))
             # fig
-            ax[0][0].imshow(frame)
+            ax[0][0].imshow(proc)
+            ax[0][0].title.set_text('The fully prcessed image')
+
             # f = f & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
             # f = cv2.rectangle(f,tl, br,(255,255,255),7)
-            ax[0][1].imshow(val)
-            ax[1][0].imshow(blur)
+            ax[0][1].imshow(filtered)
+            ax[0][1].title.set_text('The filtered image')
+
+            ax[1][0].imshow(og)
+            ax[1][0].title.set_text('The original image')
+
 
             self.showTrajectory(ax[1][1])
+            ax[1][1].title.set_text('Position and clicks from flight')
+
             
             # ax[1][1].hist(blur[blur > 0].flatten(), 255)
             # ax[5].imshow(kp)
@@ -557,7 +564,7 @@ class Analyzer:
         # filter the image for targets
         filtered = self.findWithHSV(frame)
         # extract centroids for the targets
-        highlighted, c = self.findSquare(filtered)
+        highlighted, c = self.findSquare(filtered.copy())
         # print(c)
 
         return highlighted, filtered, frame
