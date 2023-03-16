@@ -39,9 +39,13 @@ rgb_K = np.array([[3328.72744368, 0.0, 985.2442405],
 rgb_dist = np.array([-0.33986049, -0.49477998,  0.00326809, -0.00230553])
 
 # TODO: make this better
-rot_offset = np.concatenate((R.from_euler('xyz', [-0.00005, 0.002, -0.000005], degrees=True).as_matrix(), np.zeros((1,3))), axis=0)
-tra_offset = np.expand_dims(np.concatenate((np.array([0, 0, 0]), np.array([1])),axis=0).T, axis=1)
-rgb_offset = np.concatenate((rot_offset, tra_offset), axis=1)
+# rot_offset = np.concatenate((R.from_euler('xyz', [-0.00005, 0.002, -0.000005], degrees=True).as_matrix(), np.zeros((1,3))), axis=0)
+# tra_offset = np.expand_dims(np.concatenate((np.array([0, 0, 0]), np.array([1])),axis=0).T, axis=1)
+# rgb_offset = np.concatenate((rot_offset, tra_offset), axis=1)
+rgb_offset = np.array([[1, 0, 0, 0],
+                       [0, 1, 0, 0],
+                       [0, 0, 1, 0],
+                       [0, 0, 0, 1],])
 
 @dataclass
 class Dir:
@@ -280,8 +284,11 @@ class Relater:
         cur = self.db_c.cursor()
         res = cur.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='relations_{self.flight_name}';")
         if len(res.fetchall()) == 0:
+            print("making relations table")
             cur.execute(f"CREATE TABLE relations_{self.flight_name} (img_loc TEXT, pred_pixel_x array, pred_pixel_y array, blob_center_x array, blob_center_y array)")
             self.db_c.commit()
+        else:
+            print('not making relations table')
 
     def makePoseMatrix(self, trans, rot):
         rot = R.from_quat(rot).as_matrix()
@@ -366,6 +373,20 @@ class Analyzer:
         self.dir_files = Dir(root, flight_name)
         self.dir_files.bag = os.path.join(root, bag)
         self.dir_files.clicks = os.path.join(root, cs_v)
+        self.setupDirs()
+
+
+    def setupDirs(self):
+        def checkOrCreate(path):
+            if not os.path.exists(path):
+                os.mkdir(path)
+        checkOrCreate(self.dir_files.path)
+        root = os.path.join(self.dir_files.path, 'stacks')
+        checkOrCreate(root)
+        checkOrCreate(os.path.join(root, 'rgb'))
+        checkOrCreate(os.path.join(root, 'noir'))
+        checkOrCreate(os.path.join(root, 'flir'))
+
 
 
     def preprocess(self, datadir):
@@ -619,8 +640,8 @@ class Analyzer:
                     # print(p, foun_xy)
                     diff = foun_xy - p
                     # print(diff)
-                    euclid = np.abs(np.linalg.norm(diff, 2, axis=1))
-                    taxica = np.abs(np.linalg.norm(diff, 1, axis=1))
+                    euclid = np.linalg.norm(diff, 2, axis=1)
+                    taxica = np.linalg.norm(diff, 1, axis=1)
 
                     # print(diff)
                     bearin = np.arctan2(diff[:,0], diff[:,1]) * 180 / np.pi
@@ -680,6 +701,11 @@ class Analyzer:
 
     def verifyFlight(self):
         cam_com = self.preprocess(self.dir_files)
+        self.cooper.diagnostic(f"relations_{self.flight_name}")
+
+        fig, ax= plt.subplots()
+        self.showTrajectory(ax)
+        fig.show()
         # record projected points
         self.findRelations(cam_com)
         self.prettyImage(cam_com)
