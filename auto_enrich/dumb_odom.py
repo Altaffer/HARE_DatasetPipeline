@@ -64,7 +64,7 @@ class PoseEstimator:
 
 
 rospy.init_node('py_odom')
-r = rospy.Rate(4)
+r = rospy.Rate(8)
 PE = PoseEstimator()
 while not rospy.is_shutdown():
     # print('looping')

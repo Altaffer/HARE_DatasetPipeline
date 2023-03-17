@@ -127,8 +127,6 @@ class DBConnector:
 
 
 
-
-
 class Banners:
     def __init__(self, flight_name='get_lucky'):
         self.dir = None
@@ -186,8 +184,7 @@ class Banners:
         }
         '''
 
-
-    
+  
     def convertYUVtoRGB8Pixel(self, y, u, v):
         tmp_r = y + int(1.402*v) 
         tmp_g = y - int(0.714*v + 0.344*u)
@@ -256,6 +253,7 @@ class Banners:
             self.noir = None
             self.rgb = None
 
+
     def csv_read(self, csv_file):
         data = []
         with open(csv_file) as clicks:
@@ -290,6 +288,7 @@ class Relater:
         else:
             print('not making relations table')
 
+
     def makePoseMatrix(self, trans, rot):
         rot = R.from_quat(rot).as_matrix()
         trans = np.array([trans]).T
@@ -298,6 +297,7 @@ class Relater:
         pose = np.concatenate((rot, trans), axis=1)
         pose = np.concatenate((pose, np.array([[0, 0, 0, 1]])), axis=0)
         return pose
+
 
     def visCone(self, pose, FOV_angle, eps=0):        
         FOV_angle -= eps    # subtract fudge factor, defaulted to 0
@@ -310,10 +310,12 @@ class Relater:
         cone = [-horz, horz, -vert, vert]
         return cone
 
+
     def getClicksInFOV(self, pos, fov):
         cone = self.visCone(pos, fov)
         q = f"SELECT x, y FROM clicks_{self.ban_id} WHERE (x BETWEEN {cone[0] + pos[0,3]} and {cone[1] + pos[0,3]}) and (y BETWEEN {cone[2] + pos[1,3]} and {cone[3] + pos[1,3]});"
         return q
+
 
     def clicks_to_image(self, FOV_angle):
 
@@ -386,7 +388,6 @@ class Analyzer:
         checkOrCreate(os.path.join(root, 'rgb'))
         checkOrCreate(os.path.join(root, 'noir'))
         checkOrCreate(os.path.join(root, 'flir'))
-
 
 
     def preprocess(self, datadir):
@@ -462,6 +463,11 @@ class Analyzer:
         return 
 
 
+    def showClickInImage(self):
+        # TODO: PUT CLICK CIRCLE IN A REAL IMAGE
+        pass
+
+
     def prettyImage(self, cc):
         res = self.cooper.getFrom('img_loc', f"relations_{self.flight_name}", max=5)
         found_squares = []
@@ -481,6 +487,8 @@ class Analyzer:
 
             # f = f & np.array([val3, val3, val3]).swapaxes(0,2).swapaxes(0,1)
             # f = cv2.rectangle(f,tl, br,(255,255,255),7)
+            
+            # TODO: show click next to filtered image to demonstrate error in back projection
             ax[0][1].imshow(filtered)
             ax[0][1].title.set_text('The filtered image')
 
@@ -694,7 +702,7 @@ class Analyzer:
     def doTheRoar(self):
         cam_com = self.preprocess(self.dir_files)
         # record projected points
-        self.findRelations(cam_com)
+        self.findRelations(cam_com, re_run=True)
         self.computeCentroids(cam_com)
         self.computeRangeAndBearings()
 
@@ -716,3 +724,15 @@ class Analyzer:
         if extra_processing != None:
             extra_processing(data)
         self.genReport(data)
+
+    
+    def imgDiagnose(self):
+        # TODO: VISUAL INSPECTION FOR LAG BETWEEN IMAGES AND ODOM
+        # run through every image
+        # plot full trajectory
+        # put image next to traj
+        # highlight pose of image taken in full trajectory
+            # it should be a lot like pretty image and show trajectory
+
+        pass
+
